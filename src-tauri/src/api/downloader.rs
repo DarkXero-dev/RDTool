@@ -31,11 +31,18 @@ pub async fn unrestrict_links(
     links: Vec<String>,
 ) -> Result<Vec<UnrestrictedLink>> {
     let mut results = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
     for link in links {
         match unrestrict_link(client, &link).await {
             Ok(r) => results.push(r),
-            Err(e) => eprintln!("failed to unrestrict {link}: {e}"),
+            Err(e) => {
+                eprintln!("failed to unrestrict {link}: {e}");
+                errors.push(e.to_string());
+            }
         }
+    }
+    if results.is_empty() && !errors.is_empty() {
+        return Err(anyhow::anyhow!("{}", errors.join("\n")));
     }
     Ok(results)
 }

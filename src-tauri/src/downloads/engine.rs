@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use std::path::Path;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
@@ -19,6 +19,7 @@ pub struct ProgressEvent {
 pub struct CompleteEvent {
     pub id: String,
     pub path: String,
+    pub bytes_done: u64,
 }
 
 #[derive(Clone)]
@@ -40,29 +41,50 @@ pub async fn download_file(
     dest_path: String,
     threads: u8,
 ) -> Result<()> {
-    let client = Client::builder().user_agent("RDTool/0.1").build()?;
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; RDTool/0.1)")
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()?;
 
-    let head = client.head(&url).send().await?;
-    let total = head
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
+    eprintln!("[download] HEAD {url}");
 
-    let dest = Path::new(&dest_path);
-    if let Some(parent) = dest.parent() {
+    let total = match client.head(&url).send().await {
+        Ok(resp) => {
+            eprintln!("[download] HEAD status: {}", resp.status());
+            resp.headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+        }
+        Err(e) => {
+            eprintln!("[download] HEAD failed: {e} - continuing without content-length");
+            None
+        }
+    };
+    eprintln!("[download] content-length: {total:?}");
+
+    if let Some(parent) = Path::new(&dest_path).parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    if total.is_none() || threads <= 1 {
-        single_thread_download(&tx, &client, &id, &url, &dest_path, total).await?;
+    let bytes_done = if total.map(|t| t > 0).unwrap_or(false) && threads > 1 {
+        multi_thread_download(&tx, &client, &id, &url, &dest_path, total.unwrap(), threads).await?
     } else {
-        multi_thread_download(&tx, &client, &id, &url, &dest_path, total.unwrap(), threads).await?;
+        single_thread_download(&tx, &client, &id, &url, &dest_path, total).await?
+    };
+
+    eprintln!("[download] done: {bytes_done} bytes written");
+
+    if bytes_done == 0 {
+        // Remove the empty file if created
+        tokio::fs::remove_file(&dest_path).await.ok();
+        return Err(anyhow!("download returned 0 bytes - URL may be invalid or expired"));
     }
 
     let _ = tx.send(DownloadEvent::Complete(CompleteEvent {
         id: id.clone(),
         path: dest_path,
+        bytes_done,
     }));
 
     Ok(())
@@ -75,8 +97,12 @@ async fn single_thread_download(
     url: &str,
     dest_path: &str,
     total: Option<u64>,
-) -> Result<()> {
-    let mut resp = client.get(url).send().await?.error_for_status()?;
+) -> Result<u64> {
+    eprintln!("[download] GET {url}");
+    let resp = client.get(url).send().await?;
+    eprintln!("[download] GET status: {}", resp.status());
+    let mut resp = resp.error_for_status()?;
+
     let mut file = File::create(dest_path).await?;
     let mut bytes_done: u64 = 0;
     let mut last_emit = std::time::Instant::now();
@@ -101,7 +127,8 @@ async fn single_thread_download(
         }
     }
     file.flush().await?;
-    Ok(())
+    eprintln!("[download] single-thread complete: {bytes_done} bytes");
+    Ok(bytes_done)
 }
 
 async fn multi_thread_download(
@@ -112,10 +139,11 @@ async fn multi_thread_download(
     dest_path: &str,
     total: u64,
     threads: u8,
-) -> Result<()> {
+) -> Result<u64> {
     let n = threads as u64;
     let chunk_size = total / n;
     let sem = Arc::new(Semaphore::new(threads as usize));
+    let bytes_counter = Arc::new(Mutex::new(0u64));
 
     let tmp_dir = format!("{dest_path}.parts");
     tokio::fs::create_dir_all(&tmp_dir).await?;
@@ -130,10 +158,11 @@ async fn multi_thread_download(
         let permit = sem.clone().acquire_owned().await?;
         let tx_clone = tx.clone();
         let id_clone = id.to_string();
+        let bytes_counter = bytes_counter.clone();
 
         handles.push(tokio::spawn(async move {
             let _permit = permit;
-            download_chunk(&tx_clone, &client, &url, &part_path, start, end, &id_clone, total).await
+            download_chunk(&tx_clone, &client, &url, &part_path, start, end, &id_clone, total, bytes_counter).await
         }));
     }
 
@@ -143,7 +172,7 @@ async fn multi_thread_download(
 
     merge_parts(&tmp_dir, dest_path, n as usize).await?;
     tokio::fs::remove_dir_all(&tmp_dir).await.ok();
-    Ok(())
+    Ok(total)
 }
 
 async fn download_chunk(
@@ -155,6 +184,7 @@ async fn download_chunk(
     end: u64,
     id: &str,
     total: u64,
+    bytes_counter: Arc<Mutex<u64>>,
 ) -> Result<()> {
     let range = format!("bytes={start}-{end}");
     let mut resp = client
@@ -165,17 +195,23 @@ async fn download_chunk(
         .error_for_status()?;
 
     let mut file = File::create(part_path).await?;
-    let mut bytes: u64 = 0;
+    let mut chunk_bytes: u64 = 0;
 
     while let Some(chunk) = resp.chunk().await? {
         file.write_all(&chunk).await?;
-        bytes += chunk.len() as u64;
+        chunk_bytes += chunk.len() as u64;
     }
     file.flush().await?;
 
+    let current = {
+        let mut c = bytes_counter.lock().unwrap();
+        *c += chunk_bytes;
+        *c
+    };
+
     let _ = tx.send(DownloadEvent::Progress(ProgressEvent {
         id: id.to_string(),
-        bytes_done: bytes,
+        bytes_done: current,
         total_bytes: Some(total),
         speed_bps: 0,
     }));

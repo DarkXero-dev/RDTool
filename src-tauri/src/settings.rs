@@ -10,6 +10,8 @@ pub struct AppSettings {
     pub quiet_hours_enabled: bool,
     pub quiet_hours_start: Option<String>,
     pub quiet_hours_end: Option<String>,
+    #[serde(default)]
+    pub tray_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -25,6 +27,7 @@ impl Default for AppSettings {
             quiet_hours_enabled: false,
             quiet_hours_start: None,
             quiet_hours_end: None,
+            tray_enabled: false,
         }
     }
 }
