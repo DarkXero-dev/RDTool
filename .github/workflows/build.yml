@@ -88,43 +88,11 @@ jobs:
           echo "AppImage: $APPIMAGE"
           chmod +x "$APPIMAGE"
 
-          # Find squashfs offset by parsing the ELF structure (reliable, no false positives).
-          # Byte-scanning for 'hsqs' can match ELF data sections; ELF PT_LOAD parsing
-          # gives the exact end of the runtime binary.
-          SQFS_OFFSET=$(python3 - "$APPIMAGE" << 'PYEOF'
-import struct, sys
-
-def find_sqfs(path):
-    with open(path, 'rb') as f:
-        if f.read(4) != b'\x7fELF':
-            return None
-        f.seek(32); e_phoff   = struct.unpack('<Q', f.read(8))[0]
-        f.seek(54); e_phentsz = struct.unpack('<H', f.read(2))[0]
-        f.seek(56); e_phnum   = struct.unpack('<H', f.read(2))[0]
-        max_end = 0
-        for i in range(e_phnum):
-            f.seek(e_phoff + i * e_phentsz)
-            p_type = struct.unpack('<I', f.read(4))[0]
-            f.read(4); p_offset = struct.unpack('<Q', f.read(8))[0]
-            f.read(16); p_filesz = struct.unpack('<Q', f.read(8))[0]
-            if p_type == 1:  # PT_LOAD
-                max_end = max(max_end, p_offset + p_filesz)
-        # Check at exact ELF end and common alignments
-        for cand in [max_end, (max_end+511)&~511, (max_end+4095)&~4095]:
-            f.seek(cand)
-            magic = f.read(4)
-            if len(magic) == 4 and struct.unpack('<I', magic)[0] in (0x73717368, 0x68737173):
-                return cand
-    return None
-
-result = find_sqfs(sys.argv[1])
-if result:
-    print(result)
-else:
-    print("ERROR: squashfs not found", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-          )
+          # Find squashfs offset via ELF PT_LOAD parsing (no heredoc - YAML block scalars
+          # reject unindented content, breaking the workflow file).
+          # Write Python via printf so all YAML lines stay at the correct indent level.
+          printf 'import struct,sys\ndef find_sqfs(p):\n    f=open(p,"rb")\n    f.seek(32);po,=struct.unpack("<Q",f.read(8))\n    f.seek(54);ps,=struct.unpack("<H",f.read(2))\n    f.seek(56);pn,=struct.unpack("<H",f.read(2))\n    m=0\n    for i in range(pn):\n        f.seek(po+i*ps);t,=struct.unpack("<I",f.read(4));f.read(4)\n        o,=struct.unpack("<Q",f.read(8));f.read(16);s,=struct.unpack("<Q",f.read(8))\n        if t==1:m=max(m,o+s)\n    for c in[m,(m+511)&~511,(m+4095)&~4095]:\n        f.seek(c);mg=f.read(4)\n        if len(mg)==4 and struct.unpack("<I",mg)[0]in(0x73717368,0x68737173):return c\nr=find_sqfs(sys.argv[1])\nif r:print(r)\nelse:sys.exit(1)\n' > /tmp/find_sqfs.py
+          SQFS_OFFSET=$(python3 /tmp/find_sqfs.py "$APPIMAGE")
           echo "squashfs offset: $SQFS_OFFSET"
           dd if="$APPIMAGE" bs=1 count="$SQFS_OFFSET" of=/tmp/appimage-runtime 2>/dev/null
           ls -lh /tmp/appimage-runtime

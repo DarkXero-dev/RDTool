@@ -1,3 +1,9 @@
+## [0.1.14] - 2026-06-21
+
+### Bug Fixes
+
+- Fix YAML workflow parse error: heredoc content at column 0 exits the run block scalar; replace with printf one-liner to write Python script file
+
 ## [0.1.13] - 2026-06-21
 
 ### Bug Fixes
