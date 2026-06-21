@@ -1,6 +1,6 @@
 [package]
 name = "rdtool"
-version = "0.1.12"
+version = "0.1.13"
 description = "RDTool - Real-Debrid GUI Client"
 authors = ["techxero"]
 edition = "2021"

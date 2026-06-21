@@ -1,3 +1,13 @@
+## [0.1.13] - 2026-06-21
+
+### Bug Fixes
+
+- Fix AppImage SEGV: byte-scan for squashfs magic found false positives in ELF data; now use ELF PT_LOAD segment parsing to find exact squashfs offset
+- Switch squashfs compression to gzip (matches linuxdeploy default; zstd may not be compiled into the AppImage runtime's squashfuse)
+- Add .DirIcon and rdtool.png to AppImage root for icon in file managers
+- Rename output to .AppImage (capital I) for correct desktop integration
+- Fix artifact glob to match both .AppImage and .appimage
+
 ## [0.1.12] - 2026-06-21
 
 ### Bug Fixes

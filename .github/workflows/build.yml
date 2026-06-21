@@ -15,7 +15,7 @@ jobs:
         include:
           - os: ubuntu-22.04
             label: linux
-            artifact_glob: "src-tauri/target/release/bundle/**/*.AppImage"
+            artifact_glob: "src-tauri/target/release/bundle/**/*.[Aa]pp[Ii]mage"
           - os: windows-latest
             label: windows
             artifact_glob: "src-tauri/target/release/bundle/**/*.exe"
@@ -88,59 +88,97 @@ jobs:
           echo "AppImage: $APPIMAGE"
           chmod +x "$APPIMAGE"
 
-          # Extract the AppImage runtime ELF (bytes before the squashfs payload).
-          # The squashfs magic 'hsqs' marks the start of the filesystem.
-          # No external downloads needed - we reuse the runtime from our own AppImage.
-          SQFS_OFFSET=$(python3 -c "
-          import struct, sys
-          data = open('$APPIMAGE','rb').read()
-          for i in range(len(data)-4):
-              if struct.unpack('<I', data[i:i+4])[0] in (0x73717368, 0x68737173):
-                  print(i); sys.exit(0)
-          print(0)
-          ")
+          # Find squashfs offset by parsing the ELF structure (reliable, no false positives).
+          # Byte-scanning for 'hsqs' can match ELF data sections; ELF PT_LOAD parsing
+          # gives the exact end of the runtime binary.
+          SQFS_OFFSET=$(python3 - "$APPIMAGE" << 'PYEOF'
+import struct, sys
+
+def find_sqfs(path):
+    with open(path, 'rb') as f:
+        if f.read(4) != b'\x7fELF':
+            return None
+        f.seek(32); e_phoff   = struct.unpack('<Q', f.read(8))[0]
+        f.seek(54); e_phentsz = struct.unpack('<H', f.read(2))[0]
+        f.seek(56); e_phnum   = struct.unpack('<H', f.read(2))[0]
+        max_end = 0
+        for i in range(e_phnum):
+            f.seek(e_phoff + i * e_phentsz)
+            p_type = struct.unpack('<I', f.read(4))[0]
+            f.read(4); p_offset = struct.unpack('<Q', f.read(8))[0]
+            f.read(16); p_filesz = struct.unpack('<Q', f.read(8))[0]
+            if p_type == 1:  # PT_LOAD
+                max_end = max(max_end, p_offset + p_filesz)
+        # Check at exact ELF end and common alignments
+        for cand in [max_end, (max_end+511)&~511, (max_end+4095)&~4095]:
+            f.seek(cand)
+            magic = f.read(4)
+            if len(magic) == 4 and struct.unpack('<I', magic)[0] in (0x73717368, 0x68737173):
+                return cand
+    return None
+
+result = find_sqfs(sys.argv[1])
+if result:
+    print(result)
+else:
+    print("ERROR: squashfs not found", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+          )
           echo "squashfs offset: $SQFS_OFFSET"
           dd if="$APPIMAGE" bs=1 count="$SQFS_OFFSET" of=/tmp/appimage-runtime 2>/dev/null
+          ls -lh /tmp/appimage-runtime
           chmod a+x /tmp/appimage-runtime
 
-          # Extract squashfs content (no FUSE needed with APPIMAGE_EXTRACT_AND_RUN)
+          # Extract squashfs content (APPIMAGE_EXTRACT_AND_RUN=1 avoids FUSE)
           APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract
-          echo "Bundled libs: $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l) files"
+          echo "Bundled libs before strip: $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l)"
 
-          # Remove bundled display/GL/Wayland libs.
-          # linuxdeploy bundles Ubuntu 22.04 versions incompatible with Plasma 6+.
-          # Our binary only NEEDs system GTK3/wayland/mesa (see objdump -p output).
+          # Remove bundled display/GL/Wayland libs (Ubuntu 22.04 versions incompatible
+          # with Plasma 6+ / modern Wayland compositors)
           find squashfs-root/usr/lib -maxdepth 1 -name '*.so*' \( \
-            -name 'libgtk*'    -o -name 'libgdk*'    -o -name 'libglib*'   \
-            -o -name 'libgobject*' -o -name 'libgio*' -o -name 'libgmodule*' \
-            -o -name 'libgthread*' -o -name 'libwayland*' -o -name 'libX11*' \
-            -o -name 'libxcb*'  -o -name 'libXcursor*' -o -name 'libXcomposite*' \
-            -o -name 'libXdamage*' -o -name 'libXext*' -o -name 'libXi*'   \
-            -o -name 'libXfixes*' -o -name 'libXinerama*' -o -name 'libXrandr*' \
-            -o -name 'libXrender*' -o -name 'libXtst*' -o -name 'libEGL*'  \
-            -o -name 'libGL*'   -o -name 'libGLX*'    -o -name 'libGLdispatch*' \
-            -o -name 'libGLESv*' -o -name 'libdrm*'   -o -name 'libgbm*'  \
-            -o -name 'libepoxy*' -o -name 'libpango*'  -o -name 'libcairo*' \
-            -o -name 'libatk*'  -o -name 'libharfbuzz*' -o -name 'libpixman*' \
-            -o -name 'libffi*'  -o -name 'libfontconfig*' -o -name 'libfreetype*' \
-            -o -name 'libdbus*' \
+            -name 'libgtk*'      -o -name 'libgdk*'       -o -name 'libglib*'      \
+            -o -name 'libgobject*' -o -name 'libgio*'     -o -name 'libgmodule*'   \
+            -o -name 'libgthread*' -o -name 'libwayland*' -o -name 'libX11*'       \
+            -o -name 'libxcb*'   -o -name 'libXcursor*'  -o -name 'libXcomposite*' \
+            -o -name 'libXdamage*' -o -name 'libXext*'   -o -name 'libXi*'        \
+            -o -name 'libXfixes*' -o -name 'libXinerama*' -o -name 'libXrandr*'   \
+            -o -name 'libXrender*' -o -name 'libXtst*'   -o -name 'libEGL*'       \
+            -o -name 'libGL*'    -o -name 'libGLX*'      -o -name 'libGLdispatch*' \
+            -o -name 'libGLESv*' -o -name 'libdrm*'      -o -name 'libgbm*'       \
+            -o -name 'libepoxy*' -o -name 'libpango*'    -o -name 'libcairo*'     \
+            -o -name 'libatk*'   -o -name 'libharfbuzz*' -o -name 'libpixman*'    \
+            -o -name 'libffi*'   -o -name 'libfontconfig*' -o -name 'libfreetype*' \
+            -o -name 'libdbus*'  \
           \) -delete
-          echo "Libs after strip: $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l) files"
+          echo "Bundled libs after strip:  $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l)"
 
-          # Replace AppRun: skip LD_LIBRARY_PATH so host system libs are used
+          # Replace AppRun: no LD_LIBRARY_PATH = host system libs used for everything
           printf '#!/bin/bash\nAPPDIR="$(dirname "$(readlink -f "${0}")")"\nexec "$APPDIR/usr/bin/rdtool" "$@"\n' \
             > squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
 
-          # Repack: new squashfs + original runtime = fixed AppImage
+          # Ensure icon is present at root (required for AppImage icon in file managers)
+          cp src-tauri/icons/icon.png squashfs-root/rdtool.png
+          ln -sf rdtool.png squashfs-root/.DirIcon
+
+          # Repack with gzip (matches linuxdeploy default; runtime squashfuse definitely supports it)
           mksquashfs squashfs-root /tmp/stripped.squashfs \
-            -root-owned -noappend -comp zstd -b 1048576 2>/dev/null
+            -root-owned -noappend -comp gzip -b 1048576 2>/dev/null
+          ls -lh /tmp/stripped.squashfs
+
+          # Assemble: original runtime + new squashfs
           cat /tmp/appimage-runtime /tmp/stripped.squashfs > "$APPIMAGE"
           chmod +x "$APPIMAGE"
+          # Type 2 AppImage marker at byte offset 8
           printf '\x41\x49\x02' | dd bs=1 seek=8 conv=notrunc of="$APPIMAGE" 2>/dev/null
 
           rm -rf squashfs-root /tmp/stripped.squashfs /tmp/appimage-runtime
-          echo "Done: $(ls -lh $APPIMAGE)"
+
+          # Ensure extension is .AppImage (not .appimage) for desktop integration
+          FINAL="${APPIMAGE%.appimage}.AppImage"
+          if [ "$APPIMAGE" != "$FINAL" ]; then mv "$APPIMAGE" "$FINAL"; fi
+          echo "Done: $(ls -lh $FINAL)"
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
