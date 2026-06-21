@@ -1,3 +1,9 @@
+## [0.1.18] - 2026-06-21
+
+### Bug Fixes
+
+- Add license = "MIT" to Cargo.toml; cargo-generate-rpm requires it
+
 ## [0.1.17] - 2026-06-21
 
 ### Bug Fixes
