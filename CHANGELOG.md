@@ -1,3 +1,10 @@
+## [0.1.6] - 2026-06-21
+
+### Bug Fixes
+
+- Switch eframe renderer from wgpu to glow (OpenGL) - fixes AppImage crash on systems without Vulkan support
+- Add libegl1-mesa-dev and libgl1-mesa-dev to Linux CI deps for OpenGL build
+
 ## [0.1.5] - 2026-06-21
 
 ### Features
