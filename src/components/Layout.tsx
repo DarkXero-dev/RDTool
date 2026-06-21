@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import UpdateBanner from "@/components/UpdateBanner";
 import {
   LayoutDashboard,
   Download,
@@ -68,9 +69,12 @@ export default function Layout({ onLogout }: Props) {
           </button>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto p-6">
-        <Outlet />
-      </main>
+      <div className="flex flex-col flex-1 overflow-hidden">
+        <UpdateBanner />
+        <main className="flex-1 overflow-y-auto p-6">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

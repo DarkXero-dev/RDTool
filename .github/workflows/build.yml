@@ -15,13 +15,19 @@ jobs:
         include:
           - os: ubuntu-22.04
             label: linux
-            bundles: src-tauri/target/release/bundle/appimage/*.AppImage
+            installer: src-tauri/target/release/bundle/appimage/*.AppImage
+            updater: src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz
+            sigs: src-tauri/target/release/bundle/appimage/*.sig
           - os: windows-latest
             label: windows
-            bundles: src-tauri/target/release/bundle/nsis/*.exe
+            installer: src-tauri/target/release/bundle/nsis/*.exe
+            updater: src-tauri/target/release/bundle/nsis/*.nsis.zip
+            sigs: src-tauri/target/release/bundle/nsis/*.sig
           - os: macos-latest
             label: macos
-            bundles: src-tauri/target/release/bundle/dmg/*.dmg
+            installer: src-tauri/target/release/bundle/dmg/*.dmg
+            updater: src-tauri/target/release/bundle/dmg/*.dmg
+            sigs: src-tauri/target/release/bundle/dmg/*.sig
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.label }})
@@ -61,13 +67,26 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Upload build artifact
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
-          name: rdtool-${{ matrix.label }}
-          path: ${{ matrix.bundles }}
+          name: rdtool-${{ matrix.label }}-installer
+          path: ${{ matrix.installer }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload updater artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: rdtool-${{ matrix.label }}-updater
+          path: |
+            ${{ matrix.updater }}
+            ${{ matrix.sigs }}
+          if-no-files-found: ignore
           retention-days: 7
 
   release:
@@ -93,23 +112,60 @@ jobs:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Download Linux artifact
+      - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          name: rdtool-linux
-          path: artifacts/linux
+          path: artifacts
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: rdtool-windows
-          path: artifacts/windows
+      - name: Generate updater manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_URL="https://github.com/DarkXero-dev/RDTool/releases/download/${GITHUB_REF_NAME}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: rdtool-macos
-          path: artifacts/macos
+          LINUX_TAR=$(find artifacts/rdtool-linux-updater -name "*.AppImage.tar.gz" | head -1)
+          LINUX_SIG=$(find artifacts/rdtool-linux-updater -name "*.AppImage.tar.gz.sig" | head -1)
+          WIN_ZIP=$(find artifacts/rdtool-windows-updater -name "*.nsis.zip" | head -1)
+          WIN_SIG=$(find artifacts/rdtool-windows-updater -name "*.nsis.zip.sig" | head -1)
+          MAC_DMG=$(find artifacts/rdtool-macos-updater -name "*.dmg" | head -1)
+          MAC_SIG=$(find artifacts/rdtool-macos-updater -name "*.dmg.sig" | head -1)
+
+          LINUX_FILE=$(basename "$LINUX_TAR" 2>/dev/null || echo "")
+          WIN_FILE=$(basename "$WIN_ZIP" 2>/dev/null || echo "")
+          MAC_FILE=$(basename "$MAC_DMG" 2>/dev/null || echo "")
+
+          LINUX_SIG_CONTENT=$(cat "$LINUX_SIG" 2>/dev/null || echo "")
+          WIN_SIG_CONTENT=$(cat "$WIN_SIG" 2>/dev/null || echo "")
+          MAC_SIG_CONTENT=$(cat "$MAC_SIG" 2>/dev/null || echo "")
+
+          python3 - <<PYEOF
+          import json
+          data = {
+            "version": "$VERSION",
+            "notes": "See release notes on GitHub",
+            "pub_date": "$PUB_DATE",
+            "platforms": {}
+          }
+          if "$LINUX_FILE":
+            data["platforms"]["linux-x86_64"] = {
+              "url": "$BASE_URL/$LINUX_FILE",
+              "signature": """$LINUX_SIG_CONTENT"""
+            }
+          if "$WIN_FILE":
+            data["platforms"]["windows-x86_64"] = {
+              "url": "$BASE_URL/$WIN_FILE",
+              "signature": """$WIN_SIG_CONTENT"""
+            }
+          if "$MAC_FILE":
+            data["platforms"]["darwin-x86_64"] = {
+              "url": "$BASE_URL/$MAC_FILE",
+              "signature": """$MAC_SIG_CONTENT"""
+            }
+            data["platforms"]["darwin-aarch64"] = data["platforms"]["darwin-x86_64"]
+          with open("latest.json", "w") as f:
+            json.dump(data, f, indent=2)
+          print("Generated latest.json")
+          PYEOF
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -119,8 +175,14 @@ jobs:
           draft: false
           prerelease: true
           files: |
-            artifacts/linux/*.AppImage
-            artifacts/windows/*.exe
-            artifacts/macos/*.dmg
+            artifacts/rdtool-linux-installer/*.AppImage
+            artifacts/rdtool-windows-installer/*.exe
+            artifacts/rdtool-macos-installer/*.dmg
+            artifacts/rdtool-linux-updater/*.AppImage.tar.gz
+            artifacts/rdtool-linux-updater/*.sig
+            artifacts/rdtool-windows-updater/*.nsis.zip
+            artifacts/rdtool-windows-updater/*.sig
+            artifacts/rdtool-macos-updater/*.sig
+            latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
