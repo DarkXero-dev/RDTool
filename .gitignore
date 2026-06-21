@@ -28,3 +28,6 @@ src-tauri/target/
 
 # Tauri generated
 src-tauri/gen/
+
+# Local scripts
+push.sh
