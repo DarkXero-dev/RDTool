@@ -27,7 +27,7 @@ jobs:
     name: Build (${{ matrix.label }})
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system deps
         if: matrix.os == 'ubuntu-22.04'
@@ -41,7 +41,7 @@ jobs:
             libssl-dev
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -63,7 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdtool-${{ matrix.label }}
           path: ${{ matrix.bundles }}
@@ -79,7 +79,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -94,19 +94,19 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Download Linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rdtool-linux
           path: artifacts/linux
 
       - name: Download Windows artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rdtool-windows
           path: artifacts/windows
 
       - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rdtool-macos
           path: artifacts/macos
@@ -117,7 +117,7 @@ jobs:
           name: RDTool ${{ github.ref_name }}
           body_path: CHANGELOG.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: true
           files: |
             artifacts/linux/*.AppImage
             artifacts/windows/*.exe
