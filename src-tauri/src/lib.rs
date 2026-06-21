@@ -11,11 +11,13 @@ use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKit EGL crashes on Wayland without this - must be set before the app initializes
+    // Bundled WebKit (Ubuntu 22.04) crashes on Wayland/CachyOS due to EGL incompatibility.
+    // Force XWayland (X11 backend) + disable DMABuf renderer to prevent WebKitWebProcess abort.
     #[cfg(target_os = "linux")]
     {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            std::env::set_var("GDK_BACKEND", "x11");
         }
     }
     let conn = db::open().expect("failed to open database");
