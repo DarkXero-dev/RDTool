@@ -48,6 +48,9 @@ jobs:
             libxcb-xfixes0-dev \
             libegl1-mesa-dev \
             libgl1-mesa-dev
+          sudo modprobe fuse
+          sudo chmod 666 /dev/fuse
+          sudo chown root:$USER /dev/fuse
 
       - name: Install macOS system deps
         if: matrix.os == 'macos-latest'
@@ -81,11 +84,14 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1)
+          echo "AppImage: $APPIMAGE"
           chmod +x "$APPIMAGE"
-          "$APPIMAGE" --appimage-extract
-          # Remove desktop/display/GPU libs - host system must provide these.
-          # linuxdeploy bundles Ubuntu 22.04 versions which conflict with newer
-          # Wayland compositors (KDE Plasma 6+, GNOME 46+, etc.)
+          # Extract without FUSE (extract-and-run fallback)
+          APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract
+          echo "Extracted. Contents of squashfs-root/usr/lib (if any):"
+          ls squashfs-root/usr/lib/ 2>/dev/null | head -20 || echo "(no usr/lib)"
+          # Remove desktop/display/GPU libs bundled from Ubuntu 22.04 that conflict
+          # with newer Wayland compositors (KDE Plasma 6+, GNOME 46+)
           rm -f \
             squashfs-root/usr/lib/libgtk*.so* \
             squashfs-root/usr/lib/libgdk*.so* \
@@ -126,8 +132,9 @@ jobs:
             squashfs-root/usr/lib/libdbus*.so*
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
           chmod +x /tmp/appimagetool
-          ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 /tmp/appimagetool squashfs-root "$APPIMAGE"
           rm -rf squashfs-root
+          echo "Done. Final AppImage: $(ls -lh $APPIMAGE)"
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'

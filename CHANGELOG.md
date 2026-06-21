@@ -1,3 +1,10 @@
+## [0.1.10] - 2026-06-21
+
+### Bug Fixes
+
+- Load FUSE kernel module in CI before cargo-packager runs linuxdeploy (linuxdeploy is an AppImage, needs FUSE)
+- Use APPIMAGE_EXTRACT_AND_RUN=1 for all AppImage operations in CI strip step as FUSE fallback
+
 ## [0.1.9] - 2026-06-21
 
 ### Features
