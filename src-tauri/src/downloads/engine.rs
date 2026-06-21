@@ -1,44 +1,46 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use std::path::Path;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use tauri::AppHandle;
-use tauri::Emitter;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Clone)]
 pub struct ProgressEvent {
     pub id: String,
     pub bytes_done: u64,
     pub total_bytes: Option<u64>,
     pub speed_bps: u64,
-    pub status: String,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Clone)]
 pub struct CompleteEvent {
     pub id: String,
     pub path: String,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Clone)]
 pub struct ErrorEvent {
     pub id: String,
     pub error: String,
 }
 
+pub enum DownloadEvent {
+    Progress(ProgressEvent),
+    Complete(CompleteEvent),
+    Error(ErrorEvent),
+}
+
 pub async fn download_file(
-    app: AppHandle,
+    tx: Sender<DownloadEvent>,
     id: String,
     url: String,
     dest_path: String,
     threads: u8,
 ) -> Result<()> {
-    let client = Client::builder()
-        .user_agent("RDTool/0.1")
-        .build()?;
+    let client = Client::builder().user_agent("RDTool/0.1").build()?;
 
     let head = client.head(&url).send().await?;
     let total = head
@@ -53,21 +55,21 @@ pub async fn download_file(
     }
 
     if total.is_none() || threads <= 1 {
-        single_thread_download(&app, &client, &id, &url, &dest_path, total).await?;
+        single_thread_download(&tx, &client, &id, &url, &dest_path, total).await?;
     } else {
-        multi_thread_download(&app, &client, &id, &url, &dest_path, total.unwrap(), threads).await?;
+        multi_thread_download(&tx, &client, &id, &url, &dest_path, total.unwrap(), threads).await?;
     }
 
-    let _ = app.emit("download-complete", CompleteEvent {
+    let _ = tx.send(DownloadEvent::Complete(CompleteEvent {
         id: id.clone(),
-        path: dest_path.clone(),
-    });
+        path: dest_path,
+    }));
 
     Ok(())
 }
 
 async fn single_thread_download(
-    app: &AppHandle,
+    tx: &Sender<DownloadEvent>,
     client: &Client,
     id: &str,
     url: &str,
@@ -90,13 +92,12 @@ async fn single_thread_download(
             let speed_bps = (speed_bytes as f64 / elapsed.as_secs_f64()) as u64;
             speed_bytes = 0;
             last_emit = std::time::Instant::now();
-            let _ = app.emit("download-progress", ProgressEvent {
+            let _ = tx.send(DownloadEvent::Progress(ProgressEvent {
                 id: id.to_string(),
                 bytes_done,
                 total_bytes: total,
                 speed_bps,
-                status: "active".to_string(),
-            });
+            }));
         }
     }
     file.flush().await?;
@@ -104,7 +105,7 @@ async fn single_thread_download(
 }
 
 async fn multi_thread_download(
-    app: &AppHandle,
+    tx: &Sender<DownloadEvent>,
     client: &Client,
     id: &str,
     url: &str,
@@ -127,13 +128,12 @@ async fn multi_thread_download(
         let url = url.to_string();
         let part_path = format!("{tmp_dir}/{i}");
         let permit = sem.clone().acquire_owned().await?;
-        let app_clone = app.clone();
+        let tx_clone = tx.clone();
         let id_clone = id.to_string();
 
         handles.push(tokio::spawn(async move {
             let _permit = permit;
-            let result = download_chunk(&client, &url, &part_path, start, end, &app_clone, &id_clone, total).await;
-            result
+            download_chunk(&tx_clone, &client, &url, &part_path, start, end, &id_clone, total).await
         }));
     }
 
@@ -147,12 +147,12 @@ async fn multi_thread_download(
 }
 
 async fn download_chunk(
+    tx: &Sender<DownloadEvent>,
     client: &Client,
     url: &str,
     part_path: &str,
     start: u64,
     end: u64,
-    app: &AppHandle,
     id: &str,
     total: u64,
 ) -> Result<()> {
@@ -173,13 +173,12 @@ async fn download_chunk(
     }
     file.flush().await?;
 
-    let _ = app.emit("download-progress", ProgressEvent {
+    let _ = tx.send(DownloadEvent::Progress(ProgressEvent {
         id: id.to_string(),
         bytes_done: bytes,
         total_bytes: Some(total),
         speed_bps: 0,
-        status: "active".to_string(),
-    });
+    }));
 
     Ok(())
 }

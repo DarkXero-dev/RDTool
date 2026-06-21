@@ -6,7 +6,7 @@ use crate::downloads::queue;
 use crate::settings::AppSettings;
 
 pub fn start(settings: Arc<Mutex<AppSettings>>) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(30));
         loop {
             ticker.tick().await;
@@ -19,10 +19,8 @@ pub fn start(settings: Arc<Mutex<AppSettings>>) {
 
 fn tick(settings: &Arc<Mutex<AppSettings>>) -> anyhow::Result<()> {
     let s = settings.lock().unwrap().clone();
-    if s.quiet_hours_enabled {
-        if in_quiet_hours(&s) {
-            return Ok(());
-        }
+    if s.quiet_hours_enabled && in_quiet_hours(&s) {
+        return Ok(());
     }
 
     let conn = db::open()?;
@@ -50,25 +48,11 @@ fn in_quiet_hours(s: &AppSettings) -> bool {
     let Some(ref end) = s.quiet_hours_end else { return false; };
 
     let now = chrono::Local::now();
-    let current = format!("{:02}:{:02}", now.hour(), now.minute());
+    let current = format!("{:02}:{:02}", chrono::Timelike::hour(&now), chrono::Timelike::minute(&now));
 
     if start <= end {
         current >= *start && current < *end
     } else {
         current >= *start || current < *end
-    }
-}
-
-trait TimeExt {
-    fn hour(&self) -> u32;
-    fn minute(&self) -> u32;
-}
-
-impl TimeExt for chrono::DateTime<chrono::Local> {
-    fn hour(&self) -> u32 {
-        chrono::Timelike::hour(self)
-    }
-    fn minute(&self) -> u32 {
-        chrono::Timelike::minute(self)
     }
 }

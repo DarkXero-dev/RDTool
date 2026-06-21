@@ -1,78 +1,54 @@
 mod api;
 mod auth;
-mod commands;
 mod db;
 mod downloads;
 mod settings;
 mod webdav;
+pub mod ui;
 
-use commands::AppState;
 use std::sync::{Arc, Mutex};
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Bundled WebKit (Ubuntu 22.04) crashes on Wayland/CachyOS due to EGL incompatibility.
-    // Force XWayland (X11 backend) + disable DMABuf renderer to prevent WebKitWebProcess abort.
-    #[cfg(target_os = "linux")]
-    {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            std::env::set_var("GDK_BACKEND", "x11");
-        }
-    }
-    let conn = db::open().expect("failed to open database");
-    let loaded_settings = settings::load_settings();
-    let settings = Arc::new(Mutex::new(loaded_settings));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
 
-    let state = AppState {
-        settings: settings.clone(),
-        db_conn: Arc::new(Mutex::new(conn)),
+    let _guard = rt.enter();
+    let handle = tokio::runtime::Handle::current();
+
+    let settings = Arc::new(Mutex::new(settings::load_settings()));
+    let db_conn = Arc::new(Mutex::new(db::open().expect("open database")));
+
+    downloads::scheduler::start(Arc::clone(&settings));
+
+    let (ev_tx, ev_rx) = std::sync::mpsc::channel::<ui::app::AppEvent>();
+    let (dl_tx, dl_rx) = std::sync::mpsc::channel::<downloads::engine::DownloadEvent>();
+
+    let settings_c = Arc::clone(&settings);
+    let db_c = Arc::clone(&db_conn);
+    let handle_c = handle.clone();
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1200.0, 750.0])
+            .with_min_inner_size([900.0, 600.0])
+            .with_title("RDTool"),
+        ..Default::default()
     };
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .manage(state)
-        .setup(move |_app| {
-            // Tokio runtime is live here - safe to spawn async tasks
-            downloads::scheduler::start(settings);
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            commands::save_token,
-            commands::load_token,
-            commands::clear_token,
-            commands::get_user,
-            commands::unrestrict_link,
-            commands::unrestrict_links,
-            commands::export_links_to_txt,
-            commands::add_magnet,
-            commands::add_torrent_file,
-            commands::get_torrents,
-            commands::get_torrent,
-            commands::select_torrent_files,
-            commands::delete_torrent,
-            commands::get_rd_downloads,
-            commands::delete_rd_download,
-            commands::get_stream_transcodes,
-            commands::enqueue_download,
-            commands::get_queue,
-            commands::start_download,
-            commands::pause_download,
-            commands::cancel_download,
-            commands::remove_download,
-            commands::schedule_download,
-            commands::get_settings,
-            commands::save_settings_cmd,
-            webdav::webdav_status,
-            webdav::webdav_setup,
-            webdav::webdav_start,
-            webdav::webdav_stop,
-            webdav::webdav_uninstall,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    eframe::run_native(
+        "RDTool",
+        native_options,
+        Box::new(move |cc| {
+            let mut fonts = egui::FontDefinitions::default();
+            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            cc.egui_ctx.set_fonts(fonts);
+
+            Ok(Box::new(ui::app::RdApp::new(
+                cc, handle_c, settings_c, db_c, ev_tx, ev_rx, dl_tx, dl_rx,
+            )))
+        }),
+    )
+    .expect("eframe run");
 }

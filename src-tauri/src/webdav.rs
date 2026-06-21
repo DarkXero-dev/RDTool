@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct WebDavStatus {
     pub platform: String,
     pub rclone_installed: bool,
@@ -10,7 +10,6 @@ pub struct WebDavStatus {
     pub is_mounted: bool,
 }
 
-#[tauri::command]
 pub fn webdav_status() -> WebDavStatus {
     let platform = std::env::consts::OS.to_string();
 
@@ -54,14 +53,12 @@ pub fn webdav_status() -> WebDavStatus {
     }
 }
 
-#[tauri::command]
-pub async fn webdav_setup(username: String, password: String) -> Result<String, String> {
+pub fn webdav_setup(username: String, password: String) -> Result<String, String> {
     #[cfg(not(target_os = "linux"))]
     return Err("WebDAV mounting is only supported on Linux".to_string());
 
     #[cfg(target_os = "linux")]
     {
-        // Install rclone + fuse3 if missing
         let rclone_ok = Command::new("which")
             .arg("rclone")
             .output()
@@ -80,7 +77,6 @@ pub async fn webdav_setup(username: String, password: String) -> Result<String, 
             }
         }
 
-        // Encrypt password via rclone obscure
         let obscure = Command::new("rclone")
             .args(["obscure", &password])
             .output()
@@ -90,7 +86,6 @@ pub async fn webdav_setup(username: String, password: String) -> Result<String, 
         }
         let enc_pass = String::from_utf8_lossy(&obscure.stdout).trim().to_string();
 
-        // Write user-level rclone config
         let home = dirs::home_dir().ok_or("cannot determine home directory")?;
         let rclone_dir = home.join(".config/rclone");
         fs::create_dir_all(&rclone_dir).map_err(|e| e.to_string())?;
@@ -100,7 +95,6 @@ pub async fn webdav_setup(username: String, password: String) -> Result<String, 
         );
         fs::write(rclone_dir.join("rclone.conf"), &rclone_conf).map_err(|e| e.to_string())?;
 
-        // Write temp files that the root script will install
         let tmp = std::env::temp_dir();
         let tmp_root_conf = tmp.join("rdtool_root_rclone.conf");
         let tmp_svc = tmp.join("rdtool_realdebrid.service");
@@ -176,7 +170,6 @@ WantedBy=multi-user.target\n";
     }
 }
 
-#[tauri::command]
 pub fn webdav_start() -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     return Err("Linux only".to_string());
@@ -191,7 +184,6 @@ pub fn webdav_start() -> Result<(), String> {
     }
 }
 
-#[tauri::command]
 pub fn webdav_stop() -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     return Err("Linux only".to_string());
@@ -206,7 +198,6 @@ pub fn webdav_stop() -> Result<(), String> {
     }
 }
 
-#[tauri::command]
 pub fn webdav_uninstall() -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     return Err("Linux only".to_string());
