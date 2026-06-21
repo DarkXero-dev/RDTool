@@ -1,3 +1,9 @@
+## [0.1.7] - 2026-06-21
+
+### Bug Fixes
+
+- Force WINIT_UNIX_BACKEND=x11 at startup to fix AppImage crash on Wayland (glutin EGL rejects Wayland display handle inside AppImage sandbox)
+
 ## [0.1.6] - 2026-06-21
 
 ### Bug Fixes

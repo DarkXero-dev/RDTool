@@ -9,6 +9,9 @@ pub mod ui;
 use std::sync::{Arc, Mutex};
 
 pub fn run() {
+    // glutin EGL rejects the Wayland display handle inside AppImage; force XWayland
+    std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
