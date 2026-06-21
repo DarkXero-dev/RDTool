@@ -1,3 +1,10 @@
+## [0.1.12] - 2026-06-21
+
+### Bug Fixes
+
+- Fix AppImage repack: extract runtime ELF from the AppImage itself instead of downloading external files (GitHub rate-limited both appimagetool and runtime-x86_64 downloads)
+- Use find -delete instead of rm glob expansion for stripping bundled libs (more reliable in CI)
+
 ## [0.1.11] - 2026-06-21
 
 ### Bug Fixes
