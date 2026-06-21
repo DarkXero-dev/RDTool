@@ -1,3 +1,9 @@
+## [0.1.26] - 2026-06-21
+
+### Improvements
+
+- Restyle tray-enabled modal: icon badge with TRAY_ARROW_DOWN, subtitle, two info rows with EYE/POWER icons, neutral frame - matches error modal quality
+
 ## [0.1.25] - 2026-06-21
 
 ### Bug Fixes

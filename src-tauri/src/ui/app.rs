@@ -2598,39 +2598,56 @@ impl eframe::App for RdApp {
 
         if self.show_tray_modal {
             egui::Modal::new(egui::Id::new("tray_enabled_modal")).show(&ctx, |ui| {
-                ui.set_width(400.0);
-                ui.add_space(24.0);
+                ui.set_width(420.0);
+                ui.add_space(28.0);
                 ui.vertical_centered(|ui| {
+                    // Icon badge
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgba_unmultiplied(74, 222, 128, 22))
+                        .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(74, 222, 128, 80)))
+                        .corner_radius(egui::CornerRadius::same(16))
+                        .inner_margin(egui::Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(egui_phosphor::regular::TRAY_ARROW_DOWN)
+                                    .size(44.0)
+                                    .color(theme::GREEN),
+                            );
+                        });
+                    ui.add_space(14.0);
                     ui.label(
-                        RichText::new(egui_phosphor::regular::TRAY)
-                            .size(56.0)
-                            .color(theme::GREEN),
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("System Tray Enabled")
+                        RichText::new("Running in System Tray")
                             .size(18.0)
                             .strong()
                             .color(theme::TEXT),
                     );
-                    ui.add_space(14.0);
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgba_unmultiplied(74, 222, 128, 18))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(74, 222, 128, 60)))
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .inner_margin(egui::Margin::same(14))
-                        .show(ui, |ui| {
-                            ui.set_width(340.0);
-                            ui.label(
-                                RichText::new(
-                                    "Closing the window keeps RDTool running in the system tray.\n\
-                                     Right-click the tray icon to show the app or quit.",
-                                )
-                                .size(13.0)
-                                .color(theme::MUTED),
-                            );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Closing the window hides RDTool to the tray.")
+                            .size(13.0)
+                            .color(theme::MUTED),
+                    );
+                    ui.add_space(18.0);
+                    // Info rows
+                    let row = |ui: &mut egui::Ui, icon: &str, text: &str| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon).size(15.0).color(theme::GREEN));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(text).size(13.0).color(theme::MUTED));
                         });
-                    ui.add_space(20.0);
+                    };
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .inner_margin(egui::Margin::symmetric(16, 12))
+                        .show(ui, |ui| {
+                            ui.set_width(360.0);
+                            row(ui, egui_phosphor::regular::EYE, "Click tray icon to restore the window");
+                            ui.add_space(6.0);
+                            row(ui, egui_phosphor::regular::POWER, "Right-click tray icon to quit");
+                        });
+                    ui.add_space(22.0);
                     if ui
                         .add(
                             egui::Button::new(
@@ -2640,13 +2657,13 @@ impl eframe::App for RdApp {
                                     .strong(),
                             )
                             .fill(theme::GREEN)
-                            .min_size(egui::vec2(130.0, 38.0)),
+                            .min_size(egui::vec2(140.0, 38.0)),
                         )
                         .clicked()
                     {
                         self.show_tray_modal = false;
                     }
-                    ui.add_space(16.0);
+                    ui.add_space(20.0);
                 });
             });
         }
