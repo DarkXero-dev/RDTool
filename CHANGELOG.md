@@ -1,3 +1,9 @@
+## [0.1.9] - 2026-06-21
+
+### Features
+
+- Replace placeholder icons with official Real-Debrid logo across all platforms (AppImage, Windows ICO, macOS ICNS, all Windows Store tile sizes)
+
 ## [0.1.8] - 2026-06-21
 
 ### Bug Fixes
