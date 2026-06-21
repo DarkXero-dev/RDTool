@@ -102,10 +102,17 @@ pub struct RdApp {
     user: Option<user::RdUser>,
     update_available: Option<String>,
 
+    // bundled hoster icons keyed by domain (e.g. "rapidgator.net")
+    hoster_icons: std::collections::HashMap<String, egui::TextureHandle>,
+
     // downloader page
     dl_input: String,
     dl_results: Vec<downloader::UnrestrictedLink>,
     dl_loading: bool,
+    show_results: bool,
+    link_history: Vec<downloader::UnrestrictedLink>,
+    show_history: bool,
+    show_rd_links: bool,
     app_error: Option<String>,
 
     // torrents page
@@ -163,6 +170,8 @@ impl RdApp {
 
         let logged_in = auth::load_token().is_ok();
 
+        let hoster_icons = Self::load_hoster_icons(&cc.egui_ctx);
+
         let mut app = Self {
             handle,
             settings,
@@ -178,9 +187,14 @@ impl RdApp {
             login_error: None,
             user: None,
             update_available: None,
+            hoster_icons,
             dl_input: String::new(),
             dl_results: Vec::new(),
             dl_loading: false,
+            show_results: false,
+            link_history: Vec::new(),
+            show_history: false,
+            show_rd_links: false,
             app_error: None,
             torrent_magnet: String::new(),
             torrents: Vec::new(),
@@ -225,6 +239,68 @@ impl RdApp {
         app
     }
 
+    fn load_hoster_icons(ctx: &egui::Context) -> std::collections::HashMap<String, egui::TextureHandle> {
+        macro_rules! entry {
+            ($domain:literal, $file:literal) => {{
+                const BYTES: &[u8] = include_bytes!(concat!("../../assets/hosters/", $file, ".ico"));
+                match image::load_from_memory(BYTES) {
+                    Ok(img) => {
+                        let rgba = img.to_rgba8();
+                        let sz = [rgba.width() as usize, rgba.height() as usize];
+                        let ci = egui::ColorImage::from_rgba_unmultiplied(sz, rgba.as_raw());
+                        Some(($domain, ctx.load_texture($domain, ci, egui::TextureOptions::LINEAR)))
+                    }
+                    Err(_) => None,
+                }
+            }};
+        }
+
+        let entries = [
+            entry!("1fichier.com",       "1fichier"),
+            entry!("rapidgator.net",     "rapidgator"),
+            entry!("nitroflare.com",     "nitroflare"),
+            entry!("turbobit.net",       "turbobit"),
+            entry!("k2s.cc",             "keep2share"),
+            entry!("uploaded.net",       "uploaded"),
+            entry!("filefactory.com",    "filefactory"),
+            entry!("depositfiles.com",   "depositfiles"),
+            entry!("katfile.com",        "katfile"),
+            entry!("mexashare.com",      "mexashare"),
+            entry!("4shared.com",        "4shared"),
+            entry!("dropbox.com",        "dropbox"),
+            entry!("drive.google.com",   "googledrive"),
+            entry!("mega.nz",            "mega"),
+            entry!("onedrive.live.com",  "onedrive"),
+            entry!("uptobox.com",        "uptobox"),
+            entry!("alfafile.net",       "alfafile"),
+            entry!("wupfile.com",        "wupfile"),
+            entry!("subyshare.com",      "subyshare"),
+            entry!("ddownload.com",      "ddownload"),
+            entry!("rg.to",              "rgto"),
+            entry!("icerbox.com",        "icerbox"),
+            entry!("hotlink.cc",         "hotlink"),
+            entry!("upload.ee",          "uploadee"),
+            entry!("worldbytez.com",     "worldbytez"),
+            entry!("dailyuploads.net",   "dailyuploads"),
+            entry!("filespace.com",      "filespace"),
+            entry!("hugefiles.net",      "hugefiles"),
+            entry!("veryfiles.com",      "veryfiles"),
+            entry!("dl.free.fr",         "dlfreefr"),
+            entry!("usersdrive.com",     "usersdrive"),
+            entry!("clicknupload.co",    "clicknupload"),
+            entry!("filerio.in",         "filerio"),
+            entry!("takefile.link",      "takefile"),
+            entry!("filesfly.is",        "filesfly"),
+        ];
+
+        entries
+            .into_iter()
+            .flatten()
+            .map(|(domain, handle)| (domain.to_string(), handle))
+            .collect()
+    }
+
+
     fn poll_events(&mut self) {
         while let Ok(ev) = self.ev_rx.try_recv() {
             match ev {
@@ -244,8 +320,10 @@ impl RdApp {
                 }
                 AppEvent::UserRefreshed(Err(_)) => {}
                 AppEvent::LinksUnrestricted(Ok(links)) => {
+                    self.link_history.extend(links.iter().cloned());
                     self.dl_results = links;
                     self.dl_loading = false;
+                    self.show_results = true;
                 }
                 AppEvent::LinksUnrestricted(Err(e)) => {
                     self.app_error = Some(e);
@@ -1304,7 +1382,44 @@ impl RdApp {
     }
 
     fn show_downloader(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        ui.label(RichText::new("Link Unrestrictor").size(26.0).strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Link Unrestrictor").size(26.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if !self.link_history.is_empty() {
+                    if ui.add(egui::Button::new(
+                        RichText::new(format!(
+                            "{} History ({})",
+                            egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE,
+                            self.link_history.len()
+                        ))
+                        .size(12.0)
+                        .color(egui::Color32::from_gray(200)),
+                    )
+                    .fill(egui::Color32::from_gray(42))
+                    .min_size(egui::vec2(0.0, 28.0)))
+                    .clicked()
+                    {
+                        self.show_history = true;
+                    }
+                }
+                ui.add_space(4.0);
+                let rd_count = self.rd_downloads.len();
+                let rd_label = if rd_count > 0 {
+                    format!("{} RD Links ({})", egui_phosphor::regular::CLOUD_ARROW_DOWN, rd_count)
+                } else {
+                    format!("{} RD Links", egui_phosphor::regular::CLOUD_ARROW_DOWN)
+                };
+                if ui.add(egui::Button::new(
+                    RichText::new(rd_label).size(12.0).color(egui::Color32::from_gray(200)),
+                )
+                .fill(egui::Color32::from_gray(42))
+                .min_size(egui::vec2(0.0, 28.0)))
+                .clicked()
+                {
+                    self.show_rd_links = true;
+                }
+            });
+        });
         ui.add_space(4.0);
         ui.label(
             RichText::new("Paste premium links, one per line")
@@ -1391,74 +1506,95 @@ impl RdApp {
         ui.add_space(16.0);
         ui.label(RichText::new("SUPPORTED HOSTERS").size(11.0).color(theme::MUTED).strong());
         ui.add_space(8.0);
-        const HOSTERS: &[&str] = &[
-            "1Fichier", "Rapidgator", "Nitroflare", "Turbobit", "Keep2Share",
-            "Uploaded", "Filefactory", "Depositfiles", "Katfile", "Mexashare",
-            "4Shared", "Dropbox", "Google Drive", "Mega", "OneDrive",
-            "Uptobox", "Alfafile", "Wupfile", "Subyshare", "Ddownload",
-            "Rg.to", "Icerbox", "Hotlink", "Upload.ee", "Worldbytez",
-            "Dailyuploads", "FileSpace", "Hugefiles", "Veryfiles", "Dl.free.fr",
-            "UsersDrive", "ClicknUpload", "Filerio", "Takefile", "Filesfly",
+        const HOSTERS: &[(&str, &str)] = &[
+            ("1Fichier", "1fichier.com"),
+            ("Rapidgator", "rapidgator.net"),
+            ("Nitroflare", "nitroflare.com"),
+            ("Turbobit", "turbobit.net"),
+            ("Keep2Share", "k2s.cc"),
+            ("Uploaded", "uploaded.net"),
+            ("Filefactory", "filefactory.com"),
+            ("Depositfiles", "depositfiles.com"),
+            ("Katfile", "katfile.com"),
+            ("Mexashare", "mexashare.com"),
+            ("4Shared", "4shared.com"),
+            ("Dropbox", "dropbox.com"),
+            ("Google Drive", "drive.google.com"),
+            ("Mega", "mega.nz"),
+            ("OneDrive", "onedrive.live.com"),
+            ("Uptobox", "uptobox.com"),
+            ("Alfafile", "alfafile.net"),
+            ("Wupfile", "wupfile.com"),
+            ("Subyshare", "subyshare.com"),
+            ("Ddownload", "ddownload.com"),
+            ("Rg.to", "rg.to"),
+            ("Icerbox", "icerbox.com"),
+            ("Hotlink", "hotlink.cc"),
+            ("Upload.ee", "upload.ee"),
+            ("Worldbytez", "worldbytez.com"),
+            ("Dailyuploads", "dailyuploads.net"),
+            ("FileSpace", "filespace.com"),
+            ("Hugefiles", "hugefiles.net"),
+            ("Veryfiles", "veryfiles.com"),
+            ("Dl.free.fr", "dl.free.fr"),
+            ("UsersDrive", "usersdrive.com"),
+            ("ClicknUpload", "clicknupload.co"),
+            ("Filerio", "filerio.in"),
+            ("Takefile", "takefile.link"),
+            ("Filesfly", "filesfly.is"),
         ];
+        let hoster_icons = &self.hoster_icons;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for hoster in HOSTERS {
-                ui.add(
-                    egui::Button::new(RichText::new(*hoster).size(11.5).color(egui::Color32::from_gray(210)))
-                        .fill(egui::Color32::from_gray(42))
-                        .corner_radius(egui::CornerRadius::same(5)),
-                );
+            for (name, domain) in HOSTERS {
+                let tex = hoster_icons.get(*domain);
+
+                // Pre-measure text so pill gets an exact fixed size.
+                // allocate_exact_size participates correctly in horizontal_wrapped
+                // (same technique ui.button() uses) so wrapping works.
+                let text_w = ui
+                    .painter()
+                    .layout_no_wrap(
+                        name.to_string(),
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x;
+                let h_pad = 8.0_f32;
+                let v_pad = 5.0_f32;
+                let icon_sz = 14.0_f32;
+                let gap = 4.0_f32;
+                let icon_slot = if tex.is_some() { icon_sz + gap } else { 0.0 };
+                let pill_size = egui::vec2(h_pad * 2.0 + icon_slot + text_w, v_pad * 2.0 + icon_sz);
+
+                let (rect, _) = ui.allocate_exact_size(pill_size, egui::Sense::hover());
+
+                if ui.is_rect_visible(rect) {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(5), egui::Color32::from_gray(42));
+
+                    let inner = rect.shrink2(egui::vec2(h_pad, v_pad));
+                    let mut child = ui.child_ui(
+                        inner,
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        None,
+                    );
+                    child.spacing_mut().item_spacing.x = gap;
+                    if let Some(tex) = tex {
+                        child.add(
+                            egui::Image::new(egui::load::SizedTexture::from_handle(tex))
+                                .fit_to_exact_size(egui::vec2(icon_sz, icon_sz))
+                                .corner_radius(2.0),
+                        );
+                    }
+                    child.label(
+                        RichText::new(*name).size(11.0).color(egui::Color32::from_gray(210)),
+                    );
+                }
             }
         });
 
         // RD Downloads section at bottom
-        if !self.rd_downloads.is_empty() {
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("RD DOWNLOADS").size(11.0).color(theme::MUTED).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ctx_c = ctx.clone();
-                    if ui.small_button(egui_phosphor::regular::ARROWS_CLOCKWISE).clicked() {
-                        self.load_rd_downloads(ctx_c);
-                    }
-                });
-            });
-            ui.add_space(8.0);
-            let rd_downloads = self.rd_downloads.clone();
-            let mut rd_delete_id: Option<String> = None;
-            for d in &rd_downloads {
-                theme::card_frame().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_max_width(ui.available_width() - 175.0);
-                            ui.label(RichText::new(&d.filename).size(13.0).strong());
-                            ui.label(
-                                RichText::new(format!("{} - {}", d.host, format_bytes(d.filesize)))
-                                    .size(11.0)
-                                    .color(theme::MUTED),
-                            );
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(
-                                RichText::new("Delete").color(theme::ERROR)
-                            ).min_size(egui::vec2(55.0, 24.0))).clicked() {
-                                rd_delete_id = Some(d.id.clone());
-                            }
-                            if ui.add(egui::Button::new("Queue").min_size(egui::vec2(55.0, 24.0))).clicked() {
-                                self.enqueue_download(d.download.clone(), d.filename.clone());
-                            }
-                            if ui.add(egui::Button::new("Copy").min_size(egui::vec2(55.0, 24.0))).clicked() {
-                                ui.ctx().copy_text(d.download.clone());
-                            }
-                        });
-                    });
-                });
-                ui.add_space(6.0);
-            }
-            if let Some(id) = rd_delete_id {
-                self.delete_rd_download_async(id, ctx.clone());
-            }
-        }
     }
 
     fn show_torrents(&mut self, ui: &mut Ui, ctx: &egui::Context) {
@@ -1763,7 +1899,7 @@ impl RdApp {
                         };
                         ui.vertical(|ui| {
                             ui.set_max_width(ui.available_width() - btn_w);
-                            ui.label(RichText::new(&item.filename).size(13.0).strong());
+                            ui.add(egui::Label::new(RichText::new(&item.filename).size(13.0).strong()).truncate());
                             let (status_text, status_color) = match item.status {
                                 DownloadStatus::Active => (format!("Downloading - {}", format_bytes(item.bytes_done)), theme::GREEN),
                                 DownloadStatus::Completed => (format!("Completed - {}", format_bytes(item.bytes_done)), theme::GREEN),
@@ -2335,19 +2471,36 @@ impl eframe::App for RdApp {
         }
 
         // Unrestricted links results modal
-        if !self.dl_results.is_empty() {
+        if self.show_results && !self.dl_results.is_empty() {
             egui::Modal::new(egui::Id::new("unrestrict_results")).show(&ctx, |ui| {
                 ui.set_width(560.0);
-                ui.add_space(12.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(
                         format!("{} Unrestricted Links", self.dl_results.len())
                     ).size(17.0).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // X close button - window decoration style
+                        if ui.add(
+                            egui::Button::new(
+                                RichText::new(egui_phosphor::regular::X)
+                                    .size(16.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE)
+                            .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .clicked()
+                        {
+                            self.show_results = false;
+                        }
+                        ui.separator();
                         if ui.add(egui::Button::new(
                             RichText::new("Clear All").color(theme::ERROR)
                         ).min_size(egui::vec2(90.0, 28.0))).clicked() {
                             self.dl_results.clear();
+                            self.show_results = false;
                         }
                         if ui.add(egui::Button::new("Queue All").min_size(egui::vec2(90.0, 28.0))).clicked() {
                             let results = self.dl_results.clone();
@@ -2355,6 +2508,7 @@ impl eframe::App for RdApp {
                                 self.enqueue_download(item.download.clone(), item.filename.clone());
                             }
                             self.dl_results.clear();
+                            self.show_results = false;
                         }
                         if ui.add(egui::Button::new("Export TXT").min_size(egui::vec2(90.0, 28.0))).clicked() {
                             if let Some(path) = rfd::FileDialog::new()
@@ -2385,7 +2539,7 @@ impl eframe::App for RdApp {
                             ui.horizontal(|ui| {
                                 ui.vertical(|ui| {
                                     ui.set_max_width(ui.available_width() - 185.0);
-                                    ui.label(RichText::new(&item.filename).size(13.0).strong());
+                                    ui.add(egui::Label::new(RichText::new(&item.filename).size(13.0).strong()).truncate());
                                     ui.label(RichText::new(
                                         format!("{} - {}", item.host, format_bytes(item.filesize))
                                     ).size(11.0).color(theme::MUTED));
@@ -2416,11 +2570,267 @@ impl eframe::App for RdApp {
                         self.enqueue_download(url, name);
                     }
                     self.dl_results.remove(i);
+                    if self.dl_results.is_empty() { self.show_results = false; }
                 }
                 if let Some(i) = remove_idx {
                     self.dl_results.remove(i);
+                    if self.dl_results.is_empty() { self.show_results = false; }
                 }
 
+                ui.add_space(8.0);
+            });
+        }
+
+        // Link history modal
+        if self.show_history {
+            egui::Modal::new(egui::Id::new("link_history_modal")).show(&ctx, |ui| {
+                ui.set_width(580.0);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} Link History",
+                            egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE
+                        ))
+                        .size(17.0)
+                        .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new(
+                            RichText::new("Close").size(13.0)
+                        ).min_size(egui::vec2(70.0, 28.0))).clicked() {
+                            self.show_history = false;
+                        }
+                        if !self.link_history.is_empty() {
+                            if ui.add(egui::Button::new(
+                                RichText::new("Clear All").color(theme::ERROR).size(13.0)
+                            ).min_size(egui::vec2(80.0, 28.0))).clicked() {
+                                self.link_history.clear();
+                                self.show_history = false;
+                            }
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!("{} links unrestricted this session", self.link_history.len()))
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                if self.link_history.is_empty() {
+                    ui.add_space(40.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(egui_phosphor::regular::CLOCK_COUNTER_CLOCKWISE)
+                                .size(48.0)
+                                .color(theme::MUTED),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("No history yet").size(14.0).color(theme::MUTED));
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Unrestricted links will appear here.")
+                                .size(12.0)
+                                .color(theme::MUTED),
+                        );
+                    });
+                    ui.add_space(40.0);
+                } else {
+                    let max_h = 440.0_f32.min(ctx.content_rect().height() * 0.65);
+                    let history = self.link_history.clone();
+                    let mut queue_item: Option<usize> = None;
+                    egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                        for (i, item) in history.iter().enumerate() {
+                            theme::card_frame().show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let icon_tex = self.hoster_icons.get(&item.host);
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width(ui.available_width() - 180.0);
+                                        ui.horizontal(|ui| {
+                                            if let Some(tex) = icon_tex {
+                                                ui.add(
+                                                    egui::Image::new(egui::load::SizedTexture::from_handle(tex))
+                                                        .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                                                        .corner_radius(2.0),
+                                                );
+                                            }
+                                            ui.add_space(4.0);
+                                            ui.add(egui::Label::new(RichText::new(&item.filename).size(13.0).strong()).truncate());
+                                        });
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} - {}",
+                                                item.host,
+                                                format_bytes(item.filesize)
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::MUTED),
+                                        );
+                                    });
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.add(egui::Button::new("Queue").min_size(egui::vec2(60.0, 26.0))).clicked() {
+                                            queue_item = Some(i);
+                                        }
+                                        if ui.add(egui::Button::new("Copy").min_size(egui::vec2(55.0, 26.0))).clicked() {
+                                            ui.ctx().copy_text(item.download.clone());
+                                        }
+                                    });
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+                    if let Some(i) = queue_item {
+                        if let Some(item) = self.link_history.get(i) {
+                            let url = item.download.clone();
+                            let name = item.filename.clone();
+                            self.enqueue_download(url, name);
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+            });
+        }
+
+        // RD Links modal
+        if self.show_rd_links {
+            egui::Modal::new(egui::Id::new("rd_links_modal")).show(&ctx, |ui| {
+                ui.set_width(600.0);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} RD Links",
+                            egui_phosphor::regular::CLOUD_ARROW_DOWN
+                        ))
+                        .size(17.0)
+                        .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(
+                            egui::Button::new(
+                                RichText::new(egui_phosphor::regular::X)
+                                    .size(16.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE)
+                            .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .clicked()
+                        {
+                            self.show_rd_links = false;
+                        }
+                        if ui.add(
+                            egui::Button::new(
+                                RichText::new(egui_phosphor::regular::ARROWS_CLOCKWISE)
+                                    .size(14.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE)
+                            .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .on_hover_text("Refresh")
+                        .clicked()
+                        {
+                            self.load_rd_downloads(ctx.clone());
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                if self.rd_downloads.is_empty() {
+                    ui.add_space(40.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(egui_phosphor::regular::CLOUD_ARROW_DOWN)
+                                .size(48.0)
+                                .color(theme::MUTED),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("No RD downloads").size(14.0).color(theme::MUTED));
+                    });
+                    ui.add_space(40.0);
+                } else {
+                    ui.label(
+                        RichText::new(format!("{} files", self.rd_downloads.len()))
+                            .size(11.0)
+                            .color(theme::MUTED),
+                    );
+                    ui.add_space(6.0);
+                    let max_h = 460.0_f32.min(ctx.content_rect().height() * 0.7);
+                    let downloads = self.rd_downloads.clone();
+                    let mut delete_id: Option<String> = None;
+                    let mut queue_item: Option<usize> = None;
+                    let mut copy_url: Option<String> = None;
+                    egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                        for (i, d) in downloads.iter().enumerate() {
+                            let icon_tex = self.hoster_icons.get(&d.host);
+                            theme::card_frame().show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width(ui.available_width() - 195.0);
+                                        ui.horizontal(|ui| {
+                                            if let Some(tex) = icon_tex {
+                                                ui.add(
+                                                    egui::Image::new(egui::load::SizedTexture::from_handle(tex))
+                                                        .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                                                        .corner_radius(2.0),
+                                                );
+                                            }
+                                            ui.add_space(4.0);
+                                            ui.add(egui::Label::new(RichText::new(&d.filename).size(13.0).strong()).truncate());
+                                        });
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} - {}",
+                                                d.host,
+                                                format_bytes(d.filesize)
+                                            ))
+                                            .size(11.0)
+                                            .color(theme::MUTED),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.add(egui::Button::new(
+                                                RichText::new("Delete").color(theme::ERROR),
+                                            ).min_size(egui::vec2(58.0, 26.0))).clicked() {
+                                                delete_id = Some(d.id.clone());
+                                            }
+                                            if ui.add(egui::Button::new("Queue").min_size(egui::vec2(55.0, 26.0))).clicked() {
+                                                queue_item = Some(i);
+                                            }
+                                            if ui.add(egui::Button::new("Copy").min_size(egui::vec2(52.0, 26.0))).clicked() {
+                                                copy_url = Some(d.download.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+                    if let Some(id) = delete_id {
+                        self.delete_rd_download_async(id, ctx.clone());
+                    }
+                    if let Some(i) = queue_item {
+                        if let Some(d) = self.rd_downloads.get(i) {
+                            self.enqueue_download(d.download.clone(), d.filename.clone());
+                        }
+                    }
+                    if let Some(url) = copy_url {
+                        ctx.copy_text(url);
+                    }
+                }
                 ui.add_space(8.0);
             });
         }
