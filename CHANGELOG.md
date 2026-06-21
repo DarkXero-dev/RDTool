@@ -1,3 +1,9 @@
+## [0.1.27] - 2026-06-22
+
+### Bug Fixes
+
+- Fix X button doing nothing on Wayland: ViewportCommand::Visible(false) is a no-op in winit 0.30 on Wayland surfaces; switch to Minimized(true) which works on both X11 and Wayland
+
 ## [0.1.26] - 2026-06-21
 
 ### Improvements
