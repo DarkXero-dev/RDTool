@@ -1,3 +1,17 @@
+## [0.1.25] - 2026-06-21
+
+### Bug Fixes
+
+- Fix root cause of X-button not hiding to tray: close handler read tray_enabled from self.settings (the persisted Arc<Mutex>) but the settings page writes to settings_edit (a local edit buffer that is only flushed on Save). If user never clicked Save, tray_enabled was still false in self.settings so CancelClose was never sent and the app exited. Fix: check self.tray_icon.is_some() directly instead of settings.
+- Add tray_hidden flag: when window is hidden, call ctx.request_repaint_after(100ms) every frame to keep the winit event loop alive so tray menu clicks are processed
+
+## [0.1.24] - 2026-06-21
+
+### Bug Fixes
+
+- X button now hides to tray silently when tray is enabled; removed "Minimize to Tray?" dialog entirely
+- Restyle tray-enabled modal: centered layout, large phosphor tray icon, green-tinted content frame matching error modal quality
+
 ## [0.1.23] - 2026-06-21
 
 ### Bug Fixes

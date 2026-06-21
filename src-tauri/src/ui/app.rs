@@ -135,7 +135,7 @@ pub struct RdApp {
 
     // tray
     tray_icon: Option<tray_icon::TrayIcon>,
-    show_close_dialog: bool,
+    tray_hidden: bool,
     show_tray_modal: bool,
     force_quit: bool,
 
@@ -201,7 +201,7 @@ impl RdApp {
             settings_saving: false,
             settings_saved: false,
             tray_icon: None,
-            show_close_dialog: false,
+            tray_hidden: false,
             show_tray_modal: false,
             force_quit: false,
             webdav_status: None,
@@ -2269,6 +2269,7 @@ impl eframe::App for RdApp {
         while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             match ev.id.0.as_str() {
                 "show" => {
+                    self.tray_hidden = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
@@ -2279,12 +2280,18 @@ impl eframe::App for RdApp {
             }
         }
 
-        // Close button interception
+        // When hidden in tray, keep event loop alive so tray events are processed
+        if self.tray_hidden {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        // Close button: if tray icon exists, hide to tray instead of exiting.
+        // Check tray_icon directly - not settings, which may not be saved yet.
         if !self.force_quit && ctx.input(|i| i.viewport().close_requested()) {
-            let tray_on = self.settings.lock().unwrap().tray_enabled;
-            if tray_on && self.tray_icon.is_some() {
+            if self.tray_icon.is_some() {
+                self.tray_hidden = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.show_close_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
         }
 
@@ -2591,94 +2598,56 @@ impl eframe::App for RdApp {
 
         if self.show_tray_modal {
             egui::Modal::new(egui::Id::new("tray_enabled_modal")).show(&ctx, |ui| {
-                ui.set_width(320.0);
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("System Tray Enabled")
-                        .size(16.0)
-                        .strong()
-                        .color(theme::TEXT),
-                );
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(
-                        "RDTool will minimize to the system tray when you close the window. \
-                         Use the tray icon menu to show the app or quit.",
-                    )
-                    .size(13.0)
-                    .color(theme::MUTED),
-                );
-                ui.add_space(20.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Got it")
+                ui.set_width(400.0);
+                ui.add_space(24.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(egui_phosphor::regular::TRAY)
+                            .size(56.0)
+                            .color(theme::GREEN),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("System Tray Enabled")
+                            .size(18.0)
+                            .strong()
+                            .color(theme::TEXT),
+                    );
+                    ui.add_space(14.0);
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgba_unmultiplied(74, 222, 128, 18))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(74, 222, 128, 60)))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .inner_margin(egui::Margin::same(14))
+                        .show(ui, |ui| {
+                            ui.set_width(340.0);
+                            ui.label(
+                                RichText::new(
+                                    "Closing the window keeps RDTool running in the system tray.\n\
+                                     Right-click the tray icon to show the app or quit.",
+                                )
                                 .size(13.0)
-                                .color(egui::Color32::from_rgb(8, 22, 14))
-                                .strong(),
-                        )
-                        .fill(theme::GREEN)
-                        .min_size(egui::vec2(100.0, 36.0)),
-                    )
-                    .clicked()
-                {
-                    self.show_tray_modal = false;
-                }
-                ui.add_space(4.0);
-            });
-        }
-
-        if self.show_close_dialog {
-            egui::Modal::new(egui::Id::new("close_dialog")).show(&ctx, |ui| {
-                ui.set_width(340.0);
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("Minimize to Tray?")
-                        .size(16.0)
-                        .strong()
-                        .color(theme::TEXT),
-                );
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(
-                        "Closing the window will keep RDTool running in the system tray.",
-                    )
-                    .size(13.0)
-                    .color(theme::MUTED),
-                );
-                ui.add_space(20.0);
-                ui.horizontal(|ui| {
-                    let btn_w = 150.0;
+                                .color(theme::MUTED),
+                            );
+                        });
+                    ui.add_space(20.0);
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new("Keep in Tray")
+                                RichText::new("Got it")
                                     .size(13.0)
                                     .color(egui::Color32::from_rgb(8, 22, 14))
                                     .strong(),
                             )
                             .fill(theme::GREEN)
-                            .min_size(egui::vec2(btn_w, 36.0)),
+                            .min_size(egui::vec2(130.0, 38.0)),
                         )
                         .clicked()
                     {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                        self.show_close_dialog = false;
+                        self.show_tray_modal = false;
                     }
-                    ui.add_space(10.0);
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("Quit App").size(13.0))
-                                .min_size(egui::vec2(btn_w, 36.0)),
-                        )
-                        .clicked()
-                    {
-                        self.force_quit = true;
-                        self.show_close_dialog = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                    ui.add_space(16.0);
                 });
-                ui.add_space(4.0);
             });
         }
     }
