@@ -1,3 +1,9 @@
+## [0.1.15] - 2026-06-21
+
+### Bug Fixes
+
+- Fix squashfs offset detection: scan forward from ELF end at 4-byte increments instead of checking only 3 alignment candidates; linuxdeploy uses a non-standard alignment
+
 ## [0.1.14] - 2026-06-21
 
 ### Bug Fixes
