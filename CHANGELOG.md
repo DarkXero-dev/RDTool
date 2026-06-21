@@ -1,3 +1,10 @@
+## [0.1.23] - 2026-06-21
+
+### Bug Fixes
+
+- Fix tray minimize: use ViewportCommand::Visible(false/true) instead of Minimized; window now hides entirely to tray instead of minimizing to taskbar
+- Replace inline "Close minimizes to tray" label with a dismissible popup modal shown once when tray is enabled
+
 ## [0.1.22] - 2026-06-21
 
 ### Bug Fixes

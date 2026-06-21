@@ -136,6 +136,7 @@ pub struct RdApp {
     // tray
     tray_icon: Option<tray_icon::TrayIcon>,
     show_close_dialog: bool,
+    show_tray_modal: bool,
     force_quit: bool,
 
     // webdav
@@ -201,6 +202,7 @@ impl RdApp {
             settings_saved: false,
             tray_icon: None,
             show_close_dialog: false,
+            show_tray_modal: false,
             force_quit: false,
             webdav_status: None,
             webdav_username: String::new(),
@@ -2103,14 +2105,9 @@ impl RdApp {
                         {
                             s.tray_enabled = new_tray_enabled;
                             tray_changed = true;
-                        }
-                        if new_tray_enabled {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new("Close minimizes to tray.")
-                                    .size(11.0)
-                                    .color(theme::MUTED),
-                            );
+                            if new_tray_enabled {
+                                self.show_tray_modal = true;
+                            }
                         }
                     });
                 });
@@ -2272,7 +2269,7 @@ impl eframe::App for RdApp {
         while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             match ev.id.0.as_str() {
                 "show" => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 "quit" => {
@@ -2592,6 +2589,45 @@ impl eframe::App for RdApp {
             });
         }
 
+        if self.show_tray_modal {
+            egui::Modal::new(egui::Id::new("tray_enabled_modal")).show(&ctx, |ui| {
+                ui.set_width(320.0);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("System Tray Enabled")
+                        .size(16.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(
+                        "RDTool will minimize to the system tray when you close the window. \
+                         Use the tray icon menu to show the app or quit.",
+                    )
+                    .size(13.0)
+                    .color(theme::MUTED),
+                );
+                ui.add_space(20.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Got it")
+                                .size(13.0)
+                                .color(egui::Color32::from_rgb(8, 22, 14))
+                                .strong(),
+                        )
+                        .fill(theme::GREEN)
+                        .min_size(egui::vec2(100.0, 36.0)),
+                    )
+                    .clicked()
+                {
+                    self.show_tray_modal = false;
+                }
+                ui.add_space(4.0);
+            });
+        }
+
         if self.show_close_dialog {
             egui::Modal::new(egui::Id::new("close_dialog")).show(&ctx, |ui| {
                 ui.set_width(340.0);
@@ -2626,7 +2662,7 @@ impl eframe::App for RdApp {
                         )
                         .clicked()
                     {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         self.show_close_dialog = false;
                     }
                     ui.add_space(10.0);
