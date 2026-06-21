@@ -2262,6 +2262,10 @@ impl RdApp {
 
 impl eframe::App for RdApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Pump GTK event loop so AppIndicator tray icon stays responsive on Linux.
+        #[cfg(target_os = "linux")]
+        gtk::main_iteration_do(false);
+
         self.poll_events();
 
         // Tray menu events

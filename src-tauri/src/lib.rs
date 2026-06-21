@@ -9,6 +9,11 @@ pub mod ui;
 use std::sync::{Arc, Mutex};
 
 pub fn run() {
+    // tray-icon uses GTK AppIndicator on Linux; eframe's glow renderer
+    // does not initialize GTK, so we must do it before any tray use.
+    #[cfg(target_os = "linux")]
+    gtk::init().expect("gtk init");
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

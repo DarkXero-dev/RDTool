@@ -1,3 +1,9 @@
+## [0.1.22] - 2026-06-21
+
+### Bug Fixes
+
+- Fix crash when enabling system tray on Linux: add gtk::init() in run() and gtk::main_iteration_do() per frame so GTK AppIndicator is properly initialized and pumped
+
 ## [0.1.21] - 2026-06-21
 
 ### Bug Fixes
