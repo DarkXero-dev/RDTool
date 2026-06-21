@@ -1,6 +1,7 @@
 # Maintainer: DarkXero-dev <steve@techxero.com>
 pkgname=rdtool
-pkgver=0.1.29
+pkgver=0.1.30
+_pre="-pre"
 pkgrel=1
 pkgdesc="Real-Debrid GUI Client"
 arch=('x86_64')
@@ -8,23 +9,23 @@ url="https://github.com/DarkXero-dev/RDTool"
 license=('MIT')
 depends=('gtk3' 'openssl' 'xdotool' 'glib2' 'libayatana-appindicator' 'sqlite')
 makedepends=('rust' 'cargo' 'wayland')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-${pkgver}${_pre}.tar.gz::$url/archive/refs/tags/v${pkgver}${_pre}.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
-    cd "$srcdir/RDTool-$pkgver/src-tauri"
+    cd "$srcdir/RDTool-${pkgver}${_pre}/src-tauri"
     export RUSTUP_TOOLCHAIN=stable
     cargo fetch --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
-    cd "$srcdir/RDTool-$pkgver/src-tauri"
+    cd "$srcdir/RDTool-${pkgver}${_pre}/src-tauri"
     export RUSTUP_TOOLCHAIN=stable
     cargo build --release
 }
 
 package() {
-    cd "$srcdir/RDTool-$pkgver"
+    cd "$srcdir/RDTool-${pkgver}${_pre}"
 
     install -Dm755 src-tauri/target/release/rdtool \
         "$pkgdir/usr/bin/rdtool"
