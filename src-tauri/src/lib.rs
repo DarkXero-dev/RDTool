@@ -14,6 +14,13 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     gtk::init().expect("gtk init");
 
+    // Force X11/XWayland backend on Linux. Wayland's set_visible() is a
+    // confirmed no-op in winit 0.30 ("Not possible on Wayland"), so hiding
+    // the window to tray requires X11 where unmap actually works.
+    // XWayland is always available on KDE Plasma and GNOME Wayland sessions.
+    #[cfg(target_os = "linux")]
+    std::env::remove_var("WAYLAND_DISPLAY");
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

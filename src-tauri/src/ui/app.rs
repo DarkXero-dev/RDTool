@@ -2287,7 +2287,7 @@ impl eframe::App for RdApp {
             match ev.id.0.as_str() {
                 "show" => {
                     self.tray_hidden = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 "quit" => {
@@ -2308,7 +2308,7 @@ impl eframe::App for RdApp {
             if self.tray_icon.is_some() {
                 self.tray_hidden = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
         }
 
