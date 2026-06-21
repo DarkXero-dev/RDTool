@@ -1,3 +1,10 @@
+## [0.1.11] - 2026-06-21
+
+### Bug Fixes
+
+- Replace AppRun in AppImage to skip LD_LIBRARY_PATH; binary uses host system GTK3/wayland/mesa instead of bundled Ubuntu 22.04 versions that crash on KDE Plasma 6+
+- Switch AppImage repack from appimagetool (AppImage, needs FUSE + rate-limited) to squashfs-tools + runtime ELF (plain binary, no FUSE)
+
 ## [0.1.10] - 2026-06-21
 
 ### Bug Fixes
