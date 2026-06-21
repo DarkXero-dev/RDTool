@@ -113,7 +113,6 @@ pub struct RdApp {
     torrents: Vec<torrents::Torrent>,
     torrents_loading: bool,
     rd_downloads: Vec<torrents::RdDownload>,
-    rd_tab: TorrentTab,
     torrent_pending_files: Option<(String, Vec<torrents::TorrentFile>)>,
     torrent_file_selection: Vec<bool>,
     torrent_selecting: bool,
@@ -145,12 +144,6 @@ pub struct RdApp {
     webdav_password: String,
     webdav_busy: bool,
     webdav_msg: Option<String>,
-}
-
-#[derive(PartialEq)]
-enum TorrentTab {
-    Torrents,
-    Downloads,
 }
 
 impl RdApp {
@@ -192,7 +185,6 @@ impl RdApp {
             torrents: Vec::new(),
             torrents_loading: false,
             rd_downloads: Vec::new(),
-            rd_tab: TorrentTab::Torrents,
             torrent_pending_files: None,
             torrent_file_selection: Vec::new(),
             torrent_selecting: false,
@@ -809,6 +801,7 @@ impl RdApp {
 
     // ---- UI drawing ----
 
+    #[allow(deprecated)]
     fn show_login(&mut self, ctx: &egui::Context) {
         let bg        = egui::Color32::from_gray(22);
         let footer_bg = egui::Color32::from_gray(30);
@@ -1023,10 +1016,11 @@ impl RdApp {
             });
     }
 
+    #[allow(deprecated)]
     fn show_main(&mut self, ctx: &egui::Context) {
         // Update banner
         if let Some(ref v) = self.update_available.clone() {
-            egui::TopBottomPanel::top("update_banner")
+            egui::Panel::top("update_banner")
                 .frame(theme::green_frame())
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -1053,8 +1047,8 @@ impl RdApp {
         }
 
         // Sidebar
-        egui::SidePanel::left("sidebar")
-            .exact_width(92.0)
+        egui::Panel::left("sidebar")
+            .exact_size(92.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::BG)
@@ -1913,8 +1907,8 @@ impl RdApp {
         let saved = self.settings_saved;
         let mut do_save = false;
 
-        egui::TopBottomPanel::bottom("settings_save_bar")
-            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0, 12)))
+        egui::Panel::bottom("settings_save_bar")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 12)))
             .show_inside(ui, |ui| {
                 ui.separator();
                 ui.add_space(10.0);
@@ -2000,7 +1994,7 @@ impl RdApp {
                         ui.add_space(4.0);
                         ui.add(
                             egui::Slider::new(&mut s.threads_per_download, 1..=16)
-                                .clamp_to_range(true),
+                                .clamping(egui::SliderClamping::Always),
                         );
                     });
                     theme::card_frame().show(&mut cols[1], |ui| {
@@ -2020,7 +2014,7 @@ impl RdApp {
                         ui.add_space(4.0);
                         ui.add(
                             egui::Slider::new(&mut s.max_concurrent_downloads, 1..=10)
-                                .clamp_to_range(true),
+                                .clamping(egui::SliderClamping::Always),
                         );
                     });
                 });
@@ -2356,7 +2350,7 @@ impl eframe::App for RdApp {
                 ui.separator();
                 ui.add_space(6.0);
 
-                let max_h = 400.0_f32.min(ctx.screen_rect().height() * 0.65);
+                let max_h = 400.0_f32.min(ctx.content_rect().height() * 0.65);
                 let results = self.dl_results.clone();
                 let mut queue_idx: Option<usize> = None;
                 let mut remove_idx: Option<usize> = None;
@@ -2455,7 +2449,7 @@ impl eframe::App for RdApp {
                 });
                 ui.add_space(6.0);
 
-                let max_h = 320.0_f32.min(ctx.screen_rect().height() * 0.6);
+                let max_h = 320.0_f32.min(ctx.content_rect().height() * 0.6);
                 egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
                     for (i, file) in files.iter().enumerate() {
                         if i < self.torrent_file_selection.len() {
@@ -2651,11 +2645,6 @@ impl eframe::App for RdApp {
 }
 
 // ---- Helpers ----
-
-fn field(ui: &mut Ui, label: &str, value: &str) {
-    ui.label(RichText::new(label).size(12.0).color(theme::MUTED));
-    ui.label(RichText::new(value).size(13.0).strong());
-}
 
 fn status_dot(ui: &mut Ui, label: &str, active: bool) {
     let color = if active { theme::GREEN } else { theme::MUTED };

@@ -2,7 +2,7 @@
 // Works on X11 native and XWayland sessions.
 // On Wayland-native (non-XWayland) or non-KDE DEs this is a no-op.
 
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 pub fn request_blur(cc: &eframe::CreationContext<'_>) {
     let wh = match cc.window_handle() {

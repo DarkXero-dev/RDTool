@@ -1,6 +1,6 @@
 [package]
 name = "rdtool"
-version = "0.1.19"
+version = "0.1.20"
 description = "RDTool - Real-Debrid GUI Client"
 authors = ["techxero"]
 license = "MIT"
@@ -55,11 +55,15 @@ homepage = "https://github.com/DarkXero-dev/RDTool"
 icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.icns"]
 out-dir = "target/release/bundle"
 
+[package.metadata.packager.deb]
+desktop-template = "packaging/rdtool.desktop"
+
 [package.metadata.generate-rpm]
 assets = [
     { source = "target/release/rdtool", dest = "/usr/bin/rdtool", mode = "0755" },
     { source = "icons/icon.png", dest = "/usr/share/pixmaps/rdtool.png", mode = "0644" },
     { source = "icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/rdtool.png", mode = "0644" },
+    { source = "packaging/rdtool.desktop", dest = "/usr/share/applications/rdtool.desktop", mode = "0644" },
 ]
 
 [package.metadata.generate-rpm.requires]

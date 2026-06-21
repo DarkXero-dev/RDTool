@@ -1,3 +1,10 @@
+## [0.1.20] - 2026-06-21
+
+### Bug Fixes
+
+- Add desktop entry to deb, rpm, and Arch packages so app appears in launcher
+- Fix all compiler warnings: remove dead code (rd_tab, TorrentTab, field fn, update_schedule), remove unused imports, fix deprecated egui APIs (Panel::top/bottom/left, exact_size, Frame::NONE, SliderClamping, content_rect)
+
 ## [0.1.19] - 2026-06-21
 
 ### Bug Fixes

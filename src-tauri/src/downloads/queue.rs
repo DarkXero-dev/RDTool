@@ -151,15 +151,6 @@ pub fn update_status(conn: &Connection, id: &str, status: DownloadStatus) -> Res
     Ok(())
 }
 
-pub fn update_schedule(conn: &Connection, id: &str, at: &str) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE downloads SET scheduled_at = ?1, status = 'scheduled', updated_at = ?2 WHERE id = ?3",
-        params![at, now, id],
-    )?;
-    Ok(())
-}
-
 pub fn update_progress(conn: &Connection, id: &str, bytes_done: u64, total_bytes: Option<u64>) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     conn.execute(

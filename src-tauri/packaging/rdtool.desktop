@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=RDTool
+Comment=Real-Debrid GUI Client
+Exec=rdtool
+Icon=rdtool
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+Keywords=debrid;download;torrent;
