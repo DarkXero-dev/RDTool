@@ -1,6 +1,6 @@
 [package]
 name = "rdtool"
-version = "0.1.20"
+version = "0.1.21"
 description = "RDTool - Real-Debrid GUI Client"
 authors = ["techxero"]
 license = "MIT"
@@ -15,7 +15,7 @@ name = "rdtool_lib"
 crate-type = ["rlib"]
 
 [dependencies]
-eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
+eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts", "accesskit", "x11", "wayland"] }
 egui = "0.34"
 egui_extras = { version = "0.34", features = ["image"] }
 egui-phosphor = "0.12"

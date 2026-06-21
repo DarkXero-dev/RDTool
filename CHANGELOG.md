@@ -1,3 +1,9 @@
+## [0.1.21] - 2026-06-21
+
+### Bug Fixes
+
+- Fix crash on startup: eframe built with default-features=false strips x11 and wayland backends; glutin has no supported display handle and panics. Add x11 and wayland features explicitly.
+
 ## [0.1.20] - 2026-06-21
 
 ### Bug Fixes
