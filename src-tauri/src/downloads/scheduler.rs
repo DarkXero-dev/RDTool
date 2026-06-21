@@ -6,7 +6,7 @@ use crate::downloads::queue;
 use crate::settings::AppSettings;
 
 pub fn start(settings: Arc<Mutex<AppSettings>>) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut ticker = interval(Duration::from_secs(30));
         loop {
             ticker.tick().await;

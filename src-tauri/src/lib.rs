@@ -12,20 +12,23 @@ use std::sync::{Arc, Mutex};
 pub fn run() {
     let conn = db::open().expect("failed to open database");
     let loaded_settings = settings::load_settings();
-    let settings = Arc::new(Mutex::new(loaded_settings.clone()));
+    let settings = Arc::new(Mutex::new(loaded_settings));
 
     let state = AppState {
         settings: settings.clone(),
         db_conn: Arc::new(Mutex::new(conn)),
     };
 
-    downloads::scheduler::start(settings);
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(state)
+        .setup(move |_app| {
+            // Tokio runtime is live here - safe to spawn async tasks
+            downloads::scheduler::start(settings);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::save_token,
             commands::load_token,

@@ -194,7 +194,7 @@ pub async fn start_download(
         queue::update_status(&conn, &id, DownloadStatus::Active).map_err(|e| e.to_string())?;
     }
     let id_clone = id.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         if let Err(e) = engine::download_file(app.clone(), id_clone.clone(), item.url, item.dest_path, item.threads).await {
             let _ = app.emit("download-error", engine::ErrorEvent {
                 id: id_clone,
