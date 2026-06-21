@@ -1,6 +1,6 @@
 # Maintainer: DarkXero-dev <steve@techxero.com>
 pkgname=rdtool
-pkgver=0.1.16
+pkgver=0.1.17
 pkgrel=1
 pkgdesc="Real-Debrid GUI Client"
 arch=('x86_64')

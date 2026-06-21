@@ -1,3 +1,9 @@
+## [0.1.17] - 2026-06-21
+
+### Bug Fixes
+
+- Fix Linux packaging: cargo-packager 0.11.8 does not support rpm format; switch to cargo-generate-rpm (pure Rust, no rpmbuild needed)
+
 ## [0.1.16] - 2026-06-21
 
 ### Changes

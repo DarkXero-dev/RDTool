@@ -44,8 +44,7 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
             libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            rpm
+            libgl1-mesa-dev
 
       - name: Install macOS system deps
         if: matrix.os == 'macos-latest'
@@ -66,18 +65,22 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
+      - name: Install cargo-generate-rpm
+        if: matrix.os == 'ubuntu-22.04'
+        run: cargo install cargo-generate-rpm
+
       - name: Build release binary
         run: cargo build --release
         working-directory: src-tauri
 
-      - name: Package (Linux deb)
+      - name: Package deb (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: cargo packager --release --formats deb
         working-directory: src-tauri
 
-      - name: Package (Linux rpm)
+      - name: Package rpm (Linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo packager --release --formats rpm
+        run: cargo generate-rpm
         working-directory: src-tauri
 
       - name: Package (Windows)
@@ -97,7 +100,7 @@ jobs:
           name: rdtool-linux
           path: |
             src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/generate-rpm/*.rpm
           if-no-files-found: error
           retention-days: 7
 
