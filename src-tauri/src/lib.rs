@@ -10,6 +10,13 @@ use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKit EGL crashes on Wayland without this - must be set before the app initializes
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
     let conn = db::open().expect("failed to open database");
     let loaded_settings = settings::load_settings();
     let settings = Arc::new(Mutex::new(loaded_settings));
