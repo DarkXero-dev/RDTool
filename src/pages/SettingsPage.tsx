@@ -3,7 +3,178 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, FolderOpen, Check } from "lucide-react";
+import { Loader2, FolderOpen, Check, HardDrive, Play, Square, Trash2, RefreshCw } from "lucide-react";
+
+interface WebDavStatus {
+  platform: string;
+  rclone_installed: boolean;
+  service_installed: boolean;
+  service_active: boolean;
+  is_mounted: boolean;
+}
+
+function WebDavSection() {
+  const [status, setStatus] = useState<WebDavStatus | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  async function refresh() {
+    const s = await invoke<WebDavStatus>("webdav_status");
+    setStatus(s);
+  }
+
+  useEffect(() => { refresh(); }, []);
+
+  async function run(fn: () => Promise<unknown>, successMsg: string) {
+    setBusy(true);
+    setMsg("");
+    setErr("");
+    try {
+      await fn();
+      setMsg(successMsg);
+      await refresh();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status) return null;
+
+  if (status.platform !== "linux") {
+    return (
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+          <HardDrive size={14} /> WebDAV Mount
+        </h2>
+        <p className="text-xs text-muted-foreground">Linux only.</p>
+      </section>
+    );
+  }
+
+  const configured = status.service_installed;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+          <HardDrive size={14} /> WebDAV Mount
+        </h2>
+        <button onClick={refresh} className="text-muted-foreground hover:text-foreground" title="Refresh status">
+          <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Mounts Real-Debrid as a local filesystem at{" "}
+        <span className="font-mono text-foreground">/mnt/RealDebrid</span> via rclone + systemd.
+        Requires polkit (pkexec).
+      </p>
+
+      <div className="flex items-center gap-4 text-xs">
+        <span className={`flex items-center gap-1.5 ${status.rclone_installed ? "text-rd-green" : "text-muted-foreground"}`}>
+          <span className={`w-2 h-2 rounded-full ${status.rclone_installed ? "bg-rd-green" : "bg-muted"}`} />
+          rclone {status.rclone_installed ? "installed" : "not found"}
+        </span>
+        <span className={`flex items-center gap-1.5 ${status.service_active ? "text-rd-green" : "text-muted-foreground"}`}>
+          <span className={`w-2 h-2 rounded-full ${status.service_active ? "bg-rd-green" : "bg-muted"}`} />
+          service {status.service_active ? "active" : status.service_installed ? "stopped" : "not installed"}
+        </span>
+        <span className={`flex items-center gap-1.5 ${status.is_mounted ? "text-rd-green" : "text-muted-foreground"}`}>
+          <span className={`w-2 h-2 rounded-full ${status.is_mounted ? "bg-rd-green" : "bg-muted"}`} />
+          {status.is_mounted ? "mounted" : "not mounted"}
+        </span>
+      </div>
+
+      {!configured && (
+        <div className="flex flex-col gap-3 p-3 rounded-lg border border-border bg-card">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs text-muted-foreground">WebDAV username</label>
+            <Input
+              placeholder="your@email.com"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs text-muted-foreground">WebDAV password / secret</label>
+            <Input
+              type="password"
+              placeholder="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="h-8 text-sm"
+            />
+          </div>
+          <Button
+            variant="rd"
+            size="sm"
+            disabled={busy || !username.trim() || !password.trim()}
+            onClick={() =>
+              run(
+                () => invoke("webdav_setup", { username, password }),
+                "Mounted at /mnt/RealDebrid"
+              )
+            }
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : null}
+            Setup &amp; Mount
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Get credentials at real-debrid.com - account - WebDAV password
+          </p>
+        </div>
+      )}
+
+      {configured && (
+        <div className="flex gap-2 flex-wrap">
+          {!status.service_active ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => run(() => invoke("webdav_start"), "Service started")}
+            >
+              <Play size={12} /> Start
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => run(() => invoke("webdav_stop"), "Service stopped")}
+            >
+              <Square size={12} /> Stop
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            className="text-destructive hover:text-destructive"
+            onClick={() => run(() => invoke("webdav_uninstall"), "Uninstalled")}
+          >
+            <Trash2 size={12} /> Uninstall
+          </Button>
+        </div>
+      )}
+
+      {msg && (
+        <p className="text-xs text-rd-green">{msg}</p>
+      )}
+      {err && (
+        <p className="text-xs text-destructive-foreground bg-destructive/20 border border-destructive/30 rounded px-2 py-1">
+          {err}
+        </p>
+      )}
+    </section>
+  );
+}
 
 interface AppSettings {
   threads_per_download: number;
@@ -167,6 +338,8 @@ export default function SettingsPage() {
             </div>
           )}
         </section>
+
+        <WebDavSection />
       </div>
 
       <Button variant="rd" onClick={handleSave} disabled={saving} className="w-fit">

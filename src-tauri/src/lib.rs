@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod downloads;
 mod settings;
+mod webdav;
 
 use commands::AppState;
 use std::sync::{Arc, Mutex};
@@ -64,6 +65,11 @@ pub fn run() {
             commands::schedule_download,
             commands::get_settings,
             commands::save_settings_cmd,
+            webdav::webdav_status,
+            webdav::webdav_setup,
+            webdav::webdav_start,
+            webdav::webdav_stop,
+            webdav::webdav_uninstall,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
