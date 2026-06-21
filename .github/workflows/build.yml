@@ -15,7 +15,6 @@ jobs:
         include:
           - os: ubuntu-22.04
             label: linux
-            artifact_glob: "src-tauri/target/release/bundle/**/*.[Aa]pp[Ii]mage"
           - os: windows-latest
             label: windows
             artifact_glob: "src-tauri/target/release/bundle/**/*.exe"
@@ -39,19 +38,14 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            fuse \
-            libfuse2 \
             libxdo-dev \
             libxcb1-dev \
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
             libegl1-mesa-dev \
-            libgl1-mesa-dev
-          sudo apt-get install -y squashfs-tools
-          sudo modprobe fuse
-          sudo chmod 666 /dev/fuse
-          sudo chown root:$USER /dev/fuse
+            libgl1-mesa-dev \
+            rpm
 
       - name: Install macOS system deps
         if: matrix.os == 'macos-latest'
@@ -76,77 +70,15 @@ jobs:
         run: cargo build --release
         working-directory: src-tauri
 
-      - name: Package (Linux)
+      - name: Package (Linux deb)
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo packager --release --formats appimage
+        run: cargo packager --release --formats deb
         working-directory: src-tauri
 
-      - name: Fix AppImage for modern Wayland compositors
+      - name: Package (Linux rpm)
         if: matrix.os == 'ubuntu-22.04'
-        run: |
-          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1)
-          echo "AppImage: $APPIMAGE"
-          chmod +x "$APPIMAGE"
-
-          # Find squashfs offset via ELF PT_LOAD parsing (no heredoc - YAML block scalars
-          # reject unindented content, breaking the workflow file).
-          # Write Python via printf so all YAML lines stay at the correct indent level.
-          printf 'import struct,sys\ndef find_sqfs(p):\n    f=open(p,"rb")\n    f.seek(32);po,=struct.unpack("<Q",f.read(8))\n    f.seek(54);ps,=struct.unpack("<H",f.read(2))\n    f.seek(56);pn,=struct.unpack("<H",f.read(2))\n    m=0\n    for i in range(pn):\n        f.seek(po+i*ps);t,=struct.unpack("<I",f.read(4));f.read(4)\n        o,=struct.unpack("<Q",f.read(8));f.read(16);s,=struct.unpack("<Q",f.read(8))\n        if t==1:m=max(m,o+s)\n    f.seek(m);data=f.read(131072)\n    for i in range(0,len(data)-4,4):\n        if struct.unpack("<I",data[i:i+4])[0]in(0x73717368,0x68737173):return m+i\n    return None\nr=find_sqfs(sys.argv[1])\nif r is not None:print(r)\nelse:sys.exit(1)\n' > /tmp/find_sqfs.py
-          SQFS_OFFSET=$(python3 /tmp/find_sqfs.py "$APPIMAGE")
-          echo "squashfs offset: $SQFS_OFFSET"
-          dd if="$APPIMAGE" bs=1 count="$SQFS_OFFSET" of=/tmp/appimage-runtime 2>/dev/null
-          ls -lh /tmp/appimage-runtime
-          chmod a+x /tmp/appimage-runtime
-
-          # Extract squashfs content (APPIMAGE_EXTRACT_AND_RUN=1 avoids FUSE)
-          APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-extract
-          echo "Bundled libs before strip: $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l)"
-
-          # Remove bundled display/GL/Wayland libs (Ubuntu 22.04 versions incompatible
-          # with Plasma 6+ / modern Wayland compositors)
-          find squashfs-root/usr/lib -maxdepth 1 -name '*.so*' \( \
-            -name 'libgtk*'      -o -name 'libgdk*'       -o -name 'libglib*'      \
-            -o -name 'libgobject*' -o -name 'libgio*'     -o -name 'libgmodule*'   \
-            -o -name 'libgthread*' -o -name 'libwayland*' -o -name 'libX11*'       \
-            -o -name 'libxcb*'   -o -name 'libXcursor*'  -o -name 'libXcomposite*' \
-            -o -name 'libXdamage*' -o -name 'libXext*'   -o -name 'libXi*'        \
-            -o -name 'libXfixes*' -o -name 'libXinerama*' -o -name 'libXrandr*'   \
-            -o -name 'libXrender*' -o -name 'libXtst*'   -o -name 'libEGL*'       \
-            -o -name 'libGL*'    -o -name 'libGLX*'      -o -name 'libGLdispatch*' \
-            -o -name 'libGLESv*' -o -name 'libdrm*'      -o -name 'libgbm*'       \
-            -o -name 'libepoxy*' -o -name 'libpango*'    -o -name 'libcairo*'     \
-            -o -name 'libatk*'   -o -name 'libharfbuzz*' -o -name 'libpixman*'    \
-            -o -name 'libffi*'   -o -name 'libfontconfig*' -o -name 'libfreetype*' \
-            -o -name 'libdbus*'  \
-          \) -delete
-          echo "Bundled libs after strip:  $(ls squashfs-root/usr/lib/ 2>/dev/null | wc -l)"
-
-          # Replace AppRun: no LD_LIBRARY_PATH = host system libs used for everything
-          printf '#!/bin/bash\nAPPDIR="$(dirname "$(readlink -f "${0}")")"\nexec "$APPDIR/usr/bin/rdtool" "$@"\n' \
-            > squashfs-root/AppRun
-          chmod +x squashfs-root/AppRun
-
-          # Ensure icon is present at root (required for AppImage icon in file managers)
-          cp src-tauri/icons/icon.png squashfs-root/rdtool.png
-          ln -sf rdtool.png squashfs-root/.DirIcon
-
-          # Repack with gzip (matches linuxdeploy default; runtime squashfuse definitely supports it)
-          mksquashfs squashfs-root /tmp/stripped.squashfs \
-            -root-owned -noappend -comp gzip -b 1048576 2>/dev/null
-          ls -lh /tmp/stripped.squashfs
-
-          # Assemble: original runtime + new squashfs
-          cat /tmp/appimage-runtime /tmp/stripped.squashfs > "$APPIMAGE"
-          chmod +x "$APPIMAGE"
-          # Type 2 AppImage marker at byte offset 8
-          printf '\x41\x49\x02' | dd bs=1 seek=8 conv=notrunc of="$APPIMAGE" 2>/dev/null
-
-          rm -rf squashfs-root /tmp/stripped.squashfs /tmp/appimage-runtime
-
-          # Ensure extension is .AppImage (not .appimage) for desktop integration
-          FINAL="${APPIMAGE%.appimage}.AppImage"
-          if [ "$APPIMAGE" != "$FINAL" ]; then mv "$APPIMAGE" "$FINAL"; fi
-          echo "Done: $(ls -lh $FINAL)"
+        run: cargo packager --release --formats rpm
+        working-directory: src-tauri
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -158,7 +90,19 @@ jobs:
         run: cargo packager --release --formats dmg
         working-directory: src-tauri
 
-      - name: Upload artifact
+      - name: Upload artifact (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdtool-linux
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload artifact (non-Linux)
+        if: matrix.os != 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
           name: rdtool-${{ matrix.label }}
@@ -202,7 +146,8 @@ jobs:
           draft: false
           prerelease: true
           files: |
-            artifacts/rdtool-linux/**/*.AppImage
+            artifacts/rdtool-linux/**/*.deb
+            artifacts/rdtool-linux/**/*.rpm
             artifacts/rdtool-windows/**/*.exe
             artifacts/rdtool-macos/**/*.dmg
         env:

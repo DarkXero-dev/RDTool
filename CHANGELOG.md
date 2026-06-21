@@ -1,3 +1,11 @@
+## [0.1.16] - 2026-06-21
+
+### Changes
+
+- Drop AppImage: Linux builds now produce .deb (Debian/Ubuntu) and .rpm (Fedora/RHEL) via cargo-packager
+- Add PKGBUILD for Arch Linux (build from source with makepkg)
+- Remove fuse/squashfs-tools from CI deps; remove AppImage post-process step entirely
+
 ## [0.1.15] - 2026-06-21
 
 ### Bug Fixes
