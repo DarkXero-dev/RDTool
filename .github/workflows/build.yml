@@ -41,6 +41,7 @@ jobs:
             patchelf \
             fuse \
             libfuse2 \
+            libxdo-dev \
             libxcb1-dev \
             libxcb-render0-dev \
             libxcb-shape0-dev \
