@@ -1,3 +1,10 @@
+## [0.1.8] - 2026-06-21
+
+### Bug Fixes
+
+- Strip bundled platform libs (GTK3, wayland-client, X11, GL/EGL, pango, etc.) from AppImage; linuxdeploy bundled Ubuntu 22.04 versions conflicted with newer Wayland compositors (KDE Plasma 6+)
+- Remove erroneous WINIT_UNIX_BACKEND=x11 override; app now auto-detects Wayland/X11 correctly via host system libs
+
 ## [0.1.7] - 2026-06-21
 
 ### Bug Fixes

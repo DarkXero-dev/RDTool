@@ -77,6 +77,58 @@ jobs:
         run: cargo packager --release --formats appimage
         working-directory: src-tauri
 
+      - name: Strip bundled platform libs from AppImage
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1)
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract
+          # Remove desktop/display/GPU libs - host system must provide these.
+          # linuxdeploy bundles Ubuntu 22.04 versions which conflict with newer
+          # Wayland compositors (KDE Plasma 6+, GNOME 46+, etc.)
+          rm -f \
+            squashfs-root/usr/lib/libgtk*.so* \
+            squashfs-root/usr/lib/libgdk*.so* \
+            squashfs-root/usr/lib/libglib*.so* \
+            squashfs-root/usr/lib/libgobject*.so* \
+            squashfs-root/usr/lib/libgio*.so* \
+            squashfs-root/usr/lib/libgmodule*.so* \
+            squashfs-root/usr/lib/libgthread*.so* \
+            squashfs-root/usr/lib/libwayland*.so* \
+            squashfs-root/usr/lib/libX11*.so* \
+            squashfs-root/usr/lib/libxcb*.so* \
+            squashfs-root/usr/lib/libXext*.so* \
+            squashfs-root/usr/lib/libXi*.so* \
+            squashfs-root/usr/lib/libXrender*.so* \
+            squashfs-root/usr/lib/libXfixes*.so* \
+            squashfs-root/usr/lib/libXcursor*.so* \
+            squashfs-root/usr/lib/libXdamage*.so* \
+            squashfs-root/usr/lib/libXrandr*.so* \
+            squashfs-root/usr/lib/libXcomposite*.so* \
+            squashfs-root/usr/lib/libXinerama*.so* \
+            squashfs-root/usr/lib/libXtst*.so* \
+            squashfs-root/usr/lib/libEGL*.so* \
+            squashfs-root/usr/lib/libGL*.so* \
+            squashfs-root/usr/lib/libGLX*.so* \
+            squashfs-root/usr/lib/libGLdispatch*.so* \
+            squashfs-root/usr/lib/libGLESv*.so* \
+            squashfs-root/usr/lib/libdrm*.so* \
+            squashfs-root/usr/lib/libgbm*.so* \
+            squashfs-root/usr/lib/libpango*.so* \
+            squashfs-root/usr/lib/libcairo*.so* \
+            squashfs-root/usr/lib/libatk*.so* \
+            squashfs-root/usr/lib/libepoxy*.so* \
+            squashfs-root/usr/lib/libffi*.so* \
+            squashfs-root/usr/lib/libharfbuzz*.so* \
+            squashfs-root/usr/lib/libpixman*.so* \
+            squashfs-root/usr/lib/libfontconfig*.so* \
+            squashfs-root/usr/lib/libfreetype*.so* \
+            squashfs-root/usr/lib/libdbus*.so*
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 /tmp/appimagetool squashfs-root "$APPIMAGE"
+          rm -rf squashfs-root
+
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         run: cargo packager --release --formats nsis
