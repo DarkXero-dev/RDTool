@@ -1958,7 +1958,24 @@ impl RdApp {
         egui::ScrollArea::vertical()
             .id_salt("settings_scroll")
             .show(ui, |ui| {
-                ui.label(RichText::new("Settings").size(26.0).strong());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Settings").size(26.0).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgba_unmultiplied(74, 222, 128, 22))
+                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(74, 222, 128, 70)))
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                        .size(11.0)
+                                        .color(theme::GREEN)
+                                        .strong(),
+                                );
+                            });
+                    });
+                });
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Configure download behavior")
