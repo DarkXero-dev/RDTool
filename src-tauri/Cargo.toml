@@ -1,6 +1,6 @@
 [package]
 name = "rdtool"
-version = "0.1.18"
+version = "0.1.19"
 description = "RDTool - Real-Debrid GUI Client"
 authors = ["techxero"]
 license = "MIT"
@@ -27,7 +27,7 @@ reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 aes-gcm = "0.10"
 blake3 = "1"
 machine-uid = "0.5"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31" }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -44,6 +44,8 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 arboard = { version = "3" }
+# Linux has system SQLite; Windows/macOS do not, so bundle it there
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [package.metadata.packager]
 name = "RDTool"

@@ -1,3 +1,10 @@
+## [0.1.19] - 2026-06-21
+
+### Bug Fixes
+
+- Fix PKGBUILD link failure: rusqlite bundled SQLite conflicts with LLD (Arch default linker); use system SQLite on Linux, keep bundled only for Windows/macOS
+- Add libsqlite3-dev to CI Linux deps, sqlite to PKGBUILD depends
+
 ## [0.1.18] - 2026-06-21
 
 ### Bug Fixes

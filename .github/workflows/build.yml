@@ -44,7 +44,8 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
             libegl1-mesa-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libsqlite3-dev
 
       - name: Install macOS system deps
         if: matrix.os == 'macos-latest'
