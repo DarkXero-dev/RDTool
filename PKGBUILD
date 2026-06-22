@@ -25,8 +25,13 @@ prepare() {
 build() {
     cd "$srcdir/$_srcname/src-tauri"
     export RUSTUP_TOOLCHAIN=stable
-    # ring crate assembly is incompatible with lld; force GNU bfd linker
-    export RUSTFLAGS="${RUSTFLAGS//-C link-arg=-fuse-ld=lld/} -C link-arg=-fuse-ld=bfd"
+    # XeroLinux makepkg.conf passes -flto in CFLAGS; the cc crate forwards CFLAGS
+    # to ring's assembly compiler, producing LTO bitcode that neither lld nor bfd
+    # can resolve. Clear CFLAGS/CXXFLAGS to plain -O2 and force gcc linker (bfd).
+    export CFLAGS="-O2"
+    export CXXFLAGS="-O2"
+    export RUSTFLAGS="-C opt-level=2"
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
     cargo build --release
 }
 
