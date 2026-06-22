@@ -31,3 +31,4 @@ src-tauri/gen/
 
 # Local scripts
 push.sh
+tagp.sh

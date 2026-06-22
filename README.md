@@ -6,6 +6,12 @@
 
 A native desktop GUI client for [Real-Debrid](https://real-debrid.com). Converts restricted hosted links and magnets into fast direct downloads. Built entirely in Rust with egui - no web wrapper, no Electron.
 
+---
+
+![Screenshot](Shot.png)
+
+---
+
 ## Features
 
 - Unrestrict links from 35+ supported hosters instantly
