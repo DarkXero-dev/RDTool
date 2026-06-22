@@ -1574,10 +1574,10 @@ impl RdApp {
                     ui.painter().rect_filled(rect, egui::CornerRadius::same(5), egui::Color32::from_gray(42));
 
                     let inner = rect.shrink2(egui::vec2(h_pad, v_pad));
-                    let mut child = ui.child_ui(
-                        inner,
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        None,
+                    let mut child = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(inner)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
                     child.spacing_mut().item_spacing.x = gap;
                     if let Some(tex) = tex {

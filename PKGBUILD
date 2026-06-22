@@ -1,7 +1,6 @@
 # Maintainer: DarkXero-dev <steve@techxero.com>
 pkgname=rdtool
-pkgver=0.1.30
-_pre="-pre"
+pkgver=0.1.32.pre
 pkgrel=1
 pkgdesc="Real-Debrid GUI Client"
 arch=('x86_64')
@@ -9,23 +8,30 @@ url="https://github.com/DarkXero-dev/RDTool"
 license=('MIT')
 depends=('gtk3' 'openssl' 'xdotool' 'glib2' 'libayatana-appindicator' 'sqlite')
 makedepends=('rust' 'cargo' 'wayland')
-source=("$pkgname-${pkgver}${_pre}.tar.gz::$url/archive/refs/tags/v${pkgver}${_pre}.tar.gz")
+
+# 0.1.30.pre -> v0.1.30-pre   |   0.1.30 -> v0.1.30
+_tag="v${pkgver/.pre/-pre}"
+_srcname="RDTool-${_tag#v}"
+
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/${_tag}.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
-    cd "$srcdir/RDTool-${pkgver}${_pre}/src-tauri"
+    cd "$srcdir/$_srcname/src-tauri"
     export RUSTUP_TOOLCHAIN=stable
     cargo fetch --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
-    cd "$srcdir/RDTool-${pkgver}${_pre}/src-tauri"
+    cd "$srcdir/$_srcname/src-tauri"
     export RUSTUP_TOOLCHAIN=stable
+    # ring crate assembly is incompatible with lld; force GNU bfd linker
+    export RUSTFLAGS="${RUSTFLAGS//-C link-arg=-fuse-ld=lld/} -C link-arg=-fuse-ld=bfd"
     cargo build --release
 }
 
 package() {
-    cd "$srcdir/RDTool-${pkgver}${_pre}"
+    cd "$srcdir/$_srcname"
 
     install -Dm755 src-tauri/target/release/rdtool \
         "$pkgdir/usr/bin/rdtool"
