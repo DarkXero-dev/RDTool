@@ -1723,10 +1723,12 @@ impl RdApp {
                             + if t.status == "waiting_files_selection" { 1 } else { 0 };
                         let reserved = BTN_W * n_btns as f32 + 8.0 * (n_btns as f32 + 1.0);
                         theme::card_frame().show(ui, |ui| {
+                            let card_w = ui.available_width();
+                            ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 ui.vertical(|ui| {
                                     ui.set_max_width(ui.available_width() - reserved);
-                                    ui.label(RichText::new(&t.filename).size(13.0).strong());
+                                    ui.add(egui::Label::new(RichText::new(&t.filename).size(13.0).strong()).truncate());
                                     let (status_text, status_color) = match t.status.as_str() {
                                         "downloaded" => (format!("Downloaded - {}", format_bytes(t.bytes)), theme::GREEN),
                                         "downloading" => (format!("Downloading {:.0}% - {} seeders", t.progress, t.seeders.unwrap_or(0)), theme::WARNING),
@@ -1736,10 +1738,6 @@ impl RdApp {
                                         s => (s.to_string(), theme::MUTED),
                                     };
                                     ui.label(RichText::new(status_text).size(11.0).color(status_color));
-                                    if t.status == "downloading" {
-                                        ui.add(egui::ProgressBar::new(t.progress as f32 / 100.0)
-                                            .desired_width(f32::INFINITY));
-                                    }
                                 });
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     // right_to_left: first added = rightmost
@@ -1766,6 +1764,12 @@ impl RdApp {
                                     }
                                 });
                             });
+                            if t.status == "downloading" {
+                                ui.add_space(4.0);
+                                ui.add(egui::ProgressBar::new(t.progress as f32 / 100.0)
+                                    .desired_width(card_w));
+                            }
+                            }); // end outer vertical
                         });
                         ui.add_space(6.0);
                     }
@@ -1989,7 +1993,7 @@ impl RdApp {
                             ui.add(
                                 egui::ProgressBar::new(fraction)
                                     .text(label)
-                                    .desired_width(card_w),
+                                    .desired_width(ui.available_width()),
                             );
                         } else if item.total_bytes.map(|t| t > 0).unwrap_or(false) {
                             let fraction = item.total_bytes
@@ -2000,7 +2004,7 @@ impl RdApp {
                             ui.add(
                                 egui::ProgressBar::new(fraction)
                                     .text(format!("{} / {}", format_bytes(item.bytes_done), format_bytes(item.total_bytes.unwrap_or(0))))
-                                    .desired_width(card_w),
+                                    .desired_width(ui.available_width()),
                             );
                         }
                     }
