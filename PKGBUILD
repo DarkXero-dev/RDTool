@@ -1,12 +1,12 @@
 # Maintainer: DarkXero-dev <steve@techxero.com>
 pkgname=rdtool
-pkgver=0.1.33.pre
+pkgver=0.1.34
 pkgrel=1
 pkgdesc="Real-Debrid GUI Client"
 arch=('x86_64')
 url="https://github.com/DarkXero-dev/RDTool"
 license=('MIT')
-depends=('gtk3' 'openssl' 'xdotool' 'glib2' 'libayatana-appindicator' 'sqlite')
+depends=('gtk3' 'openssl' 'xdotool' 'glib2' 'libayatana-appindicator' 'sqlite' 'rclone')
 makedepends=('rust' 'cargo' 'wayland')
 
 # 0.1.30.pre -> v0.1.30-pre   |   0.1.30 -> v0.1.30

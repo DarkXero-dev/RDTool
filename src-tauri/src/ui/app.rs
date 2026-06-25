@@ -11,7 +11,7 @@ use crate::downloads::{
     engine::{self, DownloadEvent},
     queue::{self, DownloadOpts, DownloadStatus, QueuedDownload},
 };
-use crate::settings::{self, AppSettings};
+use crate::settings::{self, AppSettings, FileCategory};
 use crate::webdav;
 
 use super::theme;
@@ -59,6 +59,7 @@ enum Page {
     Torrents,
     Streaming,
     Downloads,
+    WebDav,
     Settings,
 }
 
@@ -80,6 +81,8 @@ pub enum AppEvent {
     SettingsSaved(Result<(), String>),
     WebDavStatus(webdav::WebDavStatus),
     WebDavDone(Result<String, String>),
+    WebDavFiles(Result<Vec<webdav::WebDavFileEntry>, String>),
+    WebDavCopyDone(Result<String, String>),
     UpdateAvailable(Option<String>),
 }
 
@@ -133,7 +136,17 @@ pub struct RdApp {
     // downloads queue
     queue: Vec<QueuedDownload>,
     dl_progress: HashMap<String, engine::ProgressEvent>,
+    dl_in_flight: std::collections::HashSet<String>,
+    needs_auto_start: bool,
+    queue_running: bool,
     delete_confirm: Option<(String, Option<String>)>, // (item_id, dest_path)
+    show_clear_confirm: bool,
+    show_schedule_all: bool,
+    schedule_all_date: String,
+    schedule_all_time: String,
+    scheduling_id: Option<String>,
+    schedule_date_input: String,
+    schedule_time_input: String,
 
     // settings page
     settings_edit: Option<AppSettings>,
@@ -146,12 +159,19 @@ pub struct RdApp {
     show_tray_modal: bool,
     force_quit: bool,
 
-    // webdav
+    // webdav settings panel
     webdav_status: Option<webdav::WebDavStatus>,
     webdav_username: String,
     webdav_password: String,
     webdav_busy: bool,
     webdav_msg: Option<String>,
+
+    // webdav browser
+    webdav_browse_path: String,
+    webdav_files: Vec<webdav::WebDavFileEntry>,
+    webdav_files_loading: bool,
+    webdav_copy_status: Option<String>,
+    webdav_icon_view: bool,
 }
 
 impl RdApp {
@@ -210,7 +230,17 @@ impl RdApp {
             stream_loading: false,
             queue: Vec::new(),
             dl_progress: HashMap::new(),
+            dl_in_flight: std::collections::HashSet::new(),
+            needs_auto_start: false,
+            queue_running: false,
             delete_confirm: None,
+            show_clear_confirm: false,
+            show_schedule_all: false,
+            schedule_all_date: String::new(),
+            schedule_all_time: String::new(),
+            scheduling_id: None,
+            schedule_date_input: String::new(),
+            schedule_time_input: String::new(),
             settings_edit: None,
             settings_saving: false,
             settings_saved: false,
@@ -223,12 +253,24 @@ impl RdApp {
             webdav_password: String::new(),
             webdav_busy: false,
             webdav_msg: None,
+            webdav_browse_path: String::from("/"),
+            webdav_files: Vec::new(),
+            webdav_files_loading: false,
+            webdav_copy_status: None,
+            webdav_icon_view: true,
         };
 
         if logged_in {
+            // Reset any Active items left over from a previous session back to Queued.
+            // All starts are manual or scheduled - never automatic on launch.
+            if let Ok(conn) = app.db_conn.lock() {
+                let _ = queue::reset_active_to_queued(&conn);
+            }
             app.fetch_user(cc.egui_ctx.clone(), false);
             app.check_update(cc.egui_ctx.clone());
             app.refresh_queue();
+            // Load WebDAV mount status so nav entry appears immediately
+            app.load_webdav_status(cc.egui_ctx.clone());
         }
 
         let tray_on = app.settings.lock().unwrap().tray_enabled;
@@ -301,7 +343,7 @@ impl RdApp {
     }
 
 
-    fn poll_events(&mut self) {
+    fn poll_events(&mut self, ctx: &egui::Context) {
         while let Ok(ev) = self.ev_rx.try_recv() {
             match ev {
                 AppEvent::LoginDone(Ok(u)) => {
@@ -385,6 +427,16 @@ impl RdApp {
                 }
                 AppEvent::RdDownloadsLoaded(Ok(list)) => {
                     self.rd_downloads = list;
+                    // If WebDAV browser is showing links/, rebuild it from the fresh list
+                    let pn = self.webdav_browse_path.trim_matches('/').to_string();
+                    if self.page == Page::WebDav && (pn == "links" || pn.starts_with("links/")) {
+                        self.webdav_files = self.rd_downloads.iter().map(|d| webdav::WebDavFileEntry {
+                            name: d.filename.clone(),
+                            full_path: format!("{}/links/{}", webdav::MOUNT_POINT, d.filename),
+                            is_dir: false,
+                            size: d.filesize,
+                        }).collect();
+                    }
                 }
                 AppEvent::RdDownloadsLoaded(Err(_)) => {}
                 AppEvent::StreamInfoLoaded(Ok(info)) => {
@@ -397,6 +449,24 @@ impl RdApp {
                 }
                 AppEvent::QueueRefreshed(items) => {
                     self.queue = items;
+                    self.needs_auto_start = true;
+                    if self.queue_running {
+                        let max = self.settings.lock().unwrap().max_concurrent_downloads as usize;
+                        let slots = max.saturating_sub(self.dl_in_flight.len());
+                        let to_start: Vec<String> = self.queue.iter()
+                            .filter(|i| i.status == DownloadStatus::Queued)
+                            .take(slots)
+                            .map(|i| i.id.clone())
+                            .collect();
+                        let any_remaining = !to_start.is_empty()
+                            || self.queue.iter().any(|i| i.status == DownloadStatus::Active);
+                        if !any_remaining {
+                            self.queue_running = false;
+                        }
+                        for id in to_start {
+                            self.start_download_item(id, ctx.clone());
+                        }
+                    }
                 }
                 AppEvent::SettingsSaved(Ok(())) => {
                     self.settings_saving = false;
@@ -412,12 +482,27 @@ impl RdApp {
                 AppEvent::WebDavDone(Ok(msg)) => {
                     self.webdav_msg = Some(msg);
                     self.webdav_busy = false;
-                    self.load_webdav_status(egui::Context::default());
+                    self.load_webdav_status(ctx.clone());
                 }
                 AppEvent::WebDavDone(Err(e)) => {
                     self.app_error = Some(e);
                     self.webdav_msg = None;
                     self.webdav_busy = false;
+                }
+                AppEvent::WebDavFiles(Ok(entries)) => {
+                    self.webdav_files = entries;
+                    self.webdav_files_loading = false;
+                }
+                AppEvent::WebDavFiles(Err(e)) => {
+                    self.webdav_files = Vec::new();
+                    self.webdav_files_loading = false;
+                    self.app_error = Some(format!("WebDAV browse: {e}"));
+                }
+                AppEvent::WebDavCopyDone(Ok(dest)) => {
+                    self.webdav_copy_status = Some(format!("Saved to {dest}"));
+                }
+                AppEvent::WebDavCopyDone(Err(e)) => {
+                    self.webdav_copy_status = Some(format!("Copy failed: {e}"));
                 }
                 AppEvent::UpdateAvailable(v) => {
                     self.update_available = v;
@@ -432,9 +517,11 @@ impl RdApp {
                         let _ = queue::update_progress(&conn, &p.id, p.bytes_done, p.total_bytes);
                     }
                     self.dl_progress.insert(p.id.clone(), p);
+                    ctx.request_repaint();
                 }
                 DownloadEvent::Complete(c) => {
                     self.dl_progress.remove(&c.id);
+                    self.dl_in_flight.remove(&c.id);
                     if let Ok(conn) = self.db_conn.lock() {
                         let _ = queue::update_progress(&conn, &c.id, c.bytes_done, None);
                         let _ = queue::update_status(&conn, &c.id, DownloadStatus::Completed);
@@ -443,6 +530,7 @@ impl RdApp {
                 }
                 DownloadEvent::Error(e) => {
                     self.dl_progress.remove(&e.id);
+                    self.dl_in_flight.remove(&e.id);
                     if let Ok(conn) = self.db_conn.lock() {
                         let _ = queue::set_error(&conn, &e.id, &e.error);
                     }
@@ -782,6 +870,20 @@ impl RdApp {
         });
     }
 
+    fn start_queue(&mut self, ctx: egui::Context) {
+        self.queue_running = true;
+        let max = self.settings.lock().unwrap().max_concurrent_downloads as usize;
+        let slots = max.saturating_sub(self.dl_in_flight.len());
+        let to_start: Vec<String> = self.queue.iter()
+            .filter(|i| i.status == DownloadStatus::Queued)
+            .take(slots)
+            .map(|i| i.id.clone())
+            .collect();
+        for id in to_start {
+            self.start_download_item(id, ctx.clone());
+        }
+    }
+
     fn refresh_queue(&self) {
         if let Ok(conn) = self.db_conn.lock() {
             if let Ok(items) = queue::get_all(&conn) {
@@ -793,7 +895,14 @@ impl RdApp {
     fn enqueue_download(&mut self, url: String, filename: String) {
         let (dest_path, threads) = {
             let s = self.settings.lock().unwrap();
-            let dest = format!("{}/{}", s.download_dir, filename);
+            let folder = match settings::detect_file_category(&filename) {
+                FileCategory::Video => s.folder_rules.video.as_deref().unwrap_or(&s.download_dir),
+                FileCategory::Audio => s.folder_rules.audio.as_deref().unwrap_or(&s.download_dir),
+                FileCategory::Archive => s.folder_rules.archive.as_deref().unwrap_or(&s.download_dir),
+                FileCategory::Programs => s.folder_rules.programs.as_deref().unwrap_or(&s.download_dir),
+                FileCategory::Other => &s.download_dir,
+            };
+            let dest = format!("{}/{}", folder, filename);
             let t = s.threads_per_download;
             (dest, t)
         };
@@ -810,6 +919,7 @@ impl RdApp {
     }
 
     fn start_download_item(&mut self, id: String, ctx: egui::Context) {
+        if self.dl_in_flight.contains(&id) { return; }
         let item = self.queue.iter().find(|d| d.id == id).cloned();
         if let Some(item) = item {
             {
@@ -817,6 +927,7 @@ impl RdApp {
                     let _ = queue::update_status(&conn, &id, DownloadStatus::Active);
                 }
             }
+            self.dl_in_flight.insert(id.clone());
             let tx = self.dl_tx.clone();
             let ctx_c = ctx.clone();
             self.handle.spawn(async move {
@@ -832,6 +943,108 @@ impl RdApp {
             });
             self.refresh_queue();
         }
+    }
+
+    fn fetch_webdav_files(&mut self, ctx: egui::Context) {
+        let path_norm = self.webdav_browse_path.trim_matches('/').to_string();
+
+        // For the links folder, use rd_downloads as source of truth (FUSE mount is stale/unreliable)
+        if path_norm == "links" || path_norm.starts_with("links/") {
+            let entries: Vec<webdav::WebDavFileEntry> = self.rd_downloads.iter().map(|d| {
+                webdav::WebDavFileEntry {
+                    name: d.filename.clone(),
+                    full_path: format!("{}/links/{}", webdav::MOUNT_POINT, d.filename),
+                    is_dir: false,
+                    size: d.filesize,
+                }
+            }).collect();
+            self.webdav_files = entries;
+            self.webdav_files_loading = false;
+            ctx.request_repaint();
+            return;
+        }
+
+        // For all other paths, use the FUSE mount
+        self.webdav_files_loading = true;
+        let tx = self.ev_tx.clone();
+        let path = self.webdav_browse_path.clone();
+        self.handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || webdav::list_mount_dir(&path))
+                .await
+                .unwrap();
+            let _ = tx.send(AppEvent::WebDavFiles(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn enqueue_from_webdav(&mut self, full_path: String, filename: String) {
+        // Look up the real CDN download URL from the RD downloads list (matched by filename).
+        // RD WebDAV returns 501 for all GET requests so we cannot download directly via WebDAV.
+        let url = self
+            .rd_downloads
+            .iter()
+            .find(|d| d.filename == filename || d.filename.eq_ignore_ascii_case(&filename))
+            .map(|d| d.download.clone())
+            .unwrap_or_else(|| {
+                // Fallback for files not in downloads list (e.g. torrent files)
+                let rel = full_path
+                    .strip_prefix(webdav::MOUNT_POINT)
+                    .unwrap_or(&full_path)
+                    .trim_start_matches('/');
+                format!("webdav:{}", rel)
+            });
+        let (dest_path, threads) = {
+            let s = self.settings.lock().unwrap();
+            let folder = match settings::detect_file_category(&filename) {
+                FileCategory::Video => s.folder_rules.video.clone().unwrap_or_else(|| s.download_dir.clone()),
+                FileCategory::Audio => s.folder_rules.audio.clone().unwrap_or_else(|| s.download_dir.clone()),
+                FileCategory::Archive => s.folder_rules.archive.clone().unwrap_or_else(|| s.download_dir.clone()),
+                FileCategory::Programs => s.folder_rules.programs.clone().unwrap_or_else(|| s.download_dir.clone()),
+                FileCategory::Other => s.download_dir.clone(),
+            };
+            let dest = format!("{}/{}", folder.trim_end_matches('/'), filename);
+            (dest, s.threads_per_download)
+        };
+        if let Ok(conn) = self.db_conn.lock() {
+            let _ = queue::enqueue(&conn, url, filename, dest_path, DownloadOpts { threads: None, scheduled_at: None, priority: 0 }, threads);
+        }
+        self.refresh_queue();
+        self.webdav_copy_status = Some("Added to queue.".to_string());
+    }
+
+    fn delete_webdav_file(&mut self, filename: String, ctx: egui::Context) {
+        // Find the RD download ID by filename and delete via API
+        let rd_id = self.rd_downloads
+            .iter()
+            .find(|d| d.filename == filename || d.filename.eq_ignore_ascii_case(&filename))
+            .map(|d| d.id.clone());
+
+        let Some(id) = rd_id else {
+            self.webdav_copy_status = Some(format!("Cannot delete: '{}' not in RD downloads list", filename));
+            return;
+        };
+
+        self.webdav_copy_status = Some("Deleting...".to_string());
+
+        let tx = self.ev_tx.clone();
+        let browse_path = self.webdav_browse_path.clone();
+        let Ok(token) = auth::load_token() else { return };
+        self.handle.spawn(async move {
+            let client = build_client(token).unwrap();
+            let del_result = torrents::delete_rd_download(&client, &id).await;
+            let ev = if let Err(e) = del_result {
+                AppEvent::WebDavFiles(Err(format!("Delete failed: {e}")))
+            } else {
+                // Give RD a moment then refresh files from mount
+                tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+                AppEvent::WebDavFiles(webdav::list_mount_dir(&browse_path))
+            };
+            let _ = tx.send(ev);
+            ctx.request_repaint();
+        });
+        // Remove from local list so it disappears immediately in the browser
+        self.rd_downloads.retain(|d| d.filename != filename);
+        self.webdav_files.retain(|f| f.name != filename);
     }
 
     fn load_webdav_status(&self, ctx: egui::Context) {
@@ -1143,14 +1356,18 @@ impl RdApp {
                 ui.add(egui::Separator::default().spacing(0.0));
                 ui.add_space(10.0);
 
-                let nav = [
+                let webdav_mounted = self.webdav_status.as_ref().map(|s| s.is_mounted).unwrap_or(false);
+                let mut nav: Vec<(&str, &str, Page)> = vec![
                     (egui_phosphor::regular::HOUSE, "Home", Page::Dashboard),
                     (egui_phosphor::regular::LINK, "Links", Page::Downloader),
                     (egui_phosphor::regular::MAGNET, "Magnets", Page::Torrents),
                     (egui_phosphor::regular::PLAY_CIRCLE, "Stream", Page::Streaming),
                     (egui_phosphor::regular::DOWNLOAD_SIMPLE, "Queue", Page::Downloads),
-                    (egui_phosphor::regular::GEAR, "Settings", Page::Settings),
                 ];
+                if webdav_mounted {
+                    nav.push((egui_phosphor::regular::HARD_DRIVES, "WebDav", Page::WebDav));
+                }
+                nav.push((egui_phosphor::regular::GEAR, "Settings", Page::Settings));
 
                 for (icon, label, p) in nav {
                     let active = self.page == p;
@@ -1269,6 +1486,10 @@ impl RdApp {
                             p.text(egui::pos2(pr.max.x - 140.0, pr.min.y + pr.height() * 0.22), egui::Align2::CENTER_CENTER, egui_phosphor::regular::DOWNLOAD_SIMPLE, egui::FontId::proportional(150.0), ghost);
                             p.text(egui::pos2(pr.min.x + 100.0, pr.min.y + pr.height() * 0.68), egui::Align2::CENTER_CENTER, egui_phosphor::regular::LIST_BULLETS, egui::FontId::proportional(110.0), g2);
                         }
+                        Page::WebDav => {
+                            p.text(egui::pos2(pr.max.x - 140.0, pr.min.y + pr.height() * 0.22), egui::Align2::CENTER_CENTER, egui_phosphor::regular::HARD_DRIVES, egui::FontId::proportional(150.0), ghost);
+                            p.text(egui::pos2(pr.min.x + 110.0, pr.min.y + pr.height() * 0.68), egui::Align2::CENTER_CENTER, egui_phosphor::regular::FOLDER_OPEN, egui::FontId::proportional(110.0), g2);
+                        }
                         Page::Settings => {
                             p.text(egui::pos2(pr.max.x - 140.0, pr.min.y + pr.height() * 0.22), egui::Align2::CENTER_CENTER, egui_phosphor::regular::GEAR, egui::FontId::proportional(155.0), ghost);
                             p.text(egui::pos2(pr.min.x + 110.0, pr.min.y + pr.height() * 0.68), egui::Align2::CENTER_CENTER, egui_phosphor::regular::SLIDERS, egui::FontId::proportional(110.0), g2);
@@ -1283,6 +1504,7 @@ impl RdApp {
                         Page::Torrents => self.show_torrents(ui, ctx),
                         Page::Streaming => self.show_streaming(ui, ctx),
                         Page::Downloads => self.show_downloads_page(ui, ctx),
+                        Page::WebDav => self.show_webdav_browser(ui, ctx),
                         Page::Settings => self.show_settings_page(ui, ctx),
                     }
                 });
@@ -1306,6 +1528,13 @@ impl RdApp {
             }
             Page::Downloads => {
                 self.refresh_queue();
+            }
+            Page::WebDav => {
+                self.webdav_browse_path = String::from("/");
+                self.webdav_copy_status = None;
+                self.fetch_webdav_files(ctx.clone());
+                // Load RD downloads list so we can resolve real CDN URLs when enqueueing
+                self.load_rd_downloads(ctx.clone());
             }
             Page::Dashboard => {
                 self.fetch_user(ctx.clone(), false);
@@ -1870,6 +2099,41 @@ impl RdApp {
                 if ui.small_button(egui_phosphor::regular::ARROWS_CLOCKWISE).clicked() {
                     self.refresh_queue();
                 }
+                let has_queued = self.queue.iter().any(|i| i.status == DownloadStatus::Queued);
+                if self.queue_running {
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new(
+                        RichText::new("Stop Queue").color(theme::WARNING).size(12.0)
+                    )).clicked() {
+                        self.queue_running = false;
+                    }
+                } else if has_queued {
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new(
+                        RichText::new("Start Queue").color(theme::GREEN).size(12.0)
+                    )).clicked() {
+                        let ctx2 = ctx.clone();
+                        self.start_queue(ctx2);
+                    }
+                }
+                if has_queued {
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new(
+                        RichText::new("Schedule All").size(12.0)
+                    )).clicked() {
+                        self.show_schedule_all = true;
+                        self.schedule_all_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+                        self.schedule_all_time = "00:00".to_string();
+                    }
+                }
+                if !self.queue.is_empty() {
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new(
+                        RichText::new("Clear").color(theme::ERROR).size(12.0)
+                    )).clicked() {
+                        self.show_clear_confirm = true;
+                    }
+                }
             });
         });
 
@@ -1890,6 +2154,9 @@ impl RdApp {
         let mut cancel_id: Option<String> = None;
         let mut retry_id: Option<String> = None;
         let mut delete_id: Option<(String, Option<String>)> = None;
+        let mut open_scheduler: Option<String> = None;
+        let mut unschedule_id: Option<String> = None;
+        let mut schedule_confirm: Option<(String, String)> = None;
 
         for item in &queue {
             theme::card_frame().show(ui, |ui| {
@@ -1915,8 +2182,14 @@ impl RdApp {
                                 DownloadStatus::Cancelled => ("Cancelled".to_string(), theme::MUTED),
                                 DownloadStatus::Queued => ("Queued".to_string(), theme::MUTED),
                                 DownloadStatus::Scheduled => {
-                                    let at = item.scheduled_at.as_deref().unwrap_or("?");
-                                    (format!("Scheduled: {}", at), theme::MUTED)
+                                    let display = item.scheduled_at.as_deref()
+                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| {
+                                            let local: chrono::DateTime<chrono::Local> = dt.into();
+                                            local.format("%b %d %H:%M").to_string()
+                                        })
+                                        .unwrap_or_else(|| "?".to_string());
+                                    (format!("Scheduled: {}", display), theme::MUTED)
                                 }
                             };
                             ui.label(RichText::new(status_text).size(11.0).color(status_color));
@@ -1936,9 +2209,24 @@ impl RdApp {
                                 delete_id = Some((item.id.clone(), path));
                             }
                             match item.status {
-                                DownloadStatus::Queued | DownloadStatus::Scheduled => {
+                                DownloadStatus::Queued => {
                                     if ui.add(egui::Button::new("Start").min_size(egui::vec2(60.0, 24.0))).clicked() {
                                         start_id = Some(item.id.clone());
+                                    }
+                                    if ui.add(egui::Button::new(
+                                        egui_phosphor::regular::CLOCK.to_string()
+                                    ).min_size(egui::vec2(28.0, 24.0))).on_hover_text("Schedule").clicked() {
+                                        open_scheduler = Some(item.id.clone());
+                                    }
+                                }
+                                DownloadStatus::Scheduled => {
+                                    if ui.add(egui::Button::new("Start Now").min_size(egui::vec2(70.0, 24.0))).clicked() {
+                                        start_id = Some(item.id.clone());
+                                    }
+                                    if ui.add(egui::Button::new(
+                                        RichText::new(egui_phosphor::regular::CLOCK.to_string()).color(theme::WARNING)
+                                    ).min_size(egui::vec2(28.0, 24.0))).on_hover_text("Unschedule").clicked() {
+                                        unschedule_id = Some(item.id.clone());
                                     }
                                 }
                                 DownloadStatus::Active => {
@@ -1966,6 +2254,32 @@ impl RdApp {
                         });
                     });
 
+                    // Inline schedule picker
+                    if self.scheduling_id.as_deref() == Some(&item.id) {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Date").size(12.0).color(theme::MUTED));
+                            ui.add(egui::TextEdit::singleline(&mut self.schedule_date_input)
+                                .desired_width(90.0).hint_text("YYYY-MM-DD"));
+                            ui.label(RichText::new("Time").size(12.0).color(theme::MUTED));
+                            ui.add(egui::TextEdit::singleline(&mut self.schedule_time_input)
+                                .desired_width(55.0).hint_text("HH:MM"));
+                            if ui.add(egui::Button::new(RichText::new("Confirm").color(theme::GREEN))
+                                .min_size(egui::vec2(60.0, 24.0))).clicked() {
+                                let dt_str = format!("{} {}:00", self.schedule_date_input, self.schedule_time_input);
+                                if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S") {
+                                    use chrono::TimeZone;
+                                    if let chrono::LocalResult::Single(local_dt) = chrono::Local.from_local_datetime(&ndt) {
+                                        schedule_confirm = Some((item.id.clone(), local_dt.to_rfc3339()));
+                                    }
+                                }
+                            }
+                            if ui.add(egui::Button::new("Cancel").min_size(egui::vec2(60.0, 24.0))).clicked() {
+                                open_scheduler = Some(String::new()); // signals close
+                            }
+                        });
+                    }
+
                     // Progress bar for active and paused
                     let show_progress = matches!(item.status, DownloadStatus::Active | DownloadStatus::Paused);
                     if show_progress {
@@ -1978,10 +2292,10 @@ impl RdApp {
                             ui.add_space(6.0);
                             let label = if item.status == DownloadStatus::Active {
                                 format!(
-                                    "{} / {} - {}/s",
+                                    "{} / {} - {}",
                                     format_bytes(prog.bytes_done),
                                     prog.total_bytes.map(format_bytes).unwrap_or_else(|| "?".into()),
-                                    format_bytes(prog.speed_bps)
+                                    format_speed(prog.speed_bps)
                                 )
                             } else {
                                 format!(
@@ -2030,6 +2344,7 @@ impl RdApp {
                 let _ = queue::update_status(&conn, &id, DownloadStatus::Cancelled);
             }
             self.dl_progress.remove(&id);
+            self.dl_in_flight.remove(&id);
             self.refresh_queue();
         }
         if let Some(id) = retry_id {
@@ -2041,6 +2356,217 @@ impl RdApp {
         }
         if let Some((id, path)) = delete_id {
             self.delete_confirm = Some((id, path));
+        }
+        // open_scheduler: empty string = close, non-empty = open for that id
+        if let Some(id) = open_scheduler {
+            if id.is_empty() {
+                self.scheduling_id = None;
+            } else {
+                self.scheduling_id = Some(id);
+                self.schedule_date_input = chrono::Local::now().format("%Y-%m-%d").to_string();
+                self.schedule_time_input = "00:00".to_string();
+            }
+        }
+        if let Some(id) = unschedule_id {
+            if let Ok(conn) = self.db_conn.lock() {
+                let _ = queue::update_status(&conn, &id, DownloadStatus::Queued);
+            }
+            self.refresh_queue();
+        }
+        if let Some((id, at)) = schedule_confirm {
+            if let Ok(conn) = self.db_conn.lock() {
+                let _ = queue::schedule(&conn, &id, &at);
+            }
+            self.scheduling_id = None;
+            self.refresh_queue();
+        }
+    }
+
+    fn show_webdav_browser(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        // Header + breadcrumb in one row
+        let mut breadcrumb_nav: Option<String> = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("WebDav").size(26.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button(egui_phosphor::regular::ARROWS_CLOCKWISE).clicked() {
+                    // Reload RD downloads list first so links/ shows current state
+                    self.load_rd_downloads(ctx.clone());
+                    self.fetch_webdav_files(ctx.clone());
+                }
+                ui.add_space(4.0);
+                let list_icon = egui_phosphor::regular::LIST;
+                let grid_icon = egui_phosphor::regular::SQUARES_FOUR;
+                if ui.add(egui::SelectableLabel::new(!self.webdav_icon_view, list_icon)).clicked() {
+                    self.webdav_icon_view = false;
+                }
+                if ui.add(egui::SelectableLabel::new(self.webdav_icon_view, grid_icon)).clicked() {
+                    self.webdav_icon_view = true;
+                }
+                ui.add_space(4.0);
+                if ui.small_button(egui_phosphor::regular::HOUSE).clicked() {
+                    breadcrumb_nav = Some(String::from("/"));
+                }
+                // Breadcrumb path segments
+                let parts: Vec<String> = self.webdav_browse_path.trim_matches('/')
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                // Render right-to-left so we reverse
+                for (i, part) in parts.iter().enumerate().rev() {
+                    let path_up_to = format!("/{}/", parts[..=i].join("/"));
+                    if ui.link(RichText::new(part.as_str()).size(12.0)).clicked() {
+                        breadcrumb_nav = Some(path_up_to);
+                    }
+                    ui.label(RichText::new("/").color(theme::MUTED));
+                }
+            });
+        });
+        if let Some(nav) = breadcrumb_nav {
+            self.webdav_browse_path = nav;
+            self.fetch_webdav_files(ctx.clone());
+        }
+        ui.add_space(6.0);
+
+        // Toast
+        if let Some(msg) = self.webdav_copy_status.clone() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&msg).size(12.0).color(theme::GREEN));
+                if ui.small_button("x").clicked() {
+                    self.webdav_copy_status = None;
+                }
+            });
+            ui.add_space(4.0);
+        }
+
+        if self.webdav_files_loading {
+            ui.add_space(20.0);
+            ui.vertical_centered(|ui| { ui.label(RichText::new("Loading...").color(theme::MUTED)); });
+            return;
+        }
+        if self.webdav_files.is_empty() {
+            ui.add_space(20.0);
+            ui.vertical_centered(|ui| { ui.label(RichText::new("Empty directory").color(theme::MUTED)); });
+            return;
+        }
+
+        let mut navigate_to: Option<String> = None;
+        let mut enqueue_file: Option<(String, String)> = None;
+        let mut delete_file: Option<String> = None; // filename only - use RD API
+
+        if self.webdav_icon_view {
+            // Icon grid - Frame-based cells, variable height, full wrapping names
+            let cell_w = 120.0f32;
+            let available_w = ui.available_width();
+            let cols = ((available_w / (cell_w + 8.0)) as usize).max(1);
+
+            let entries_snap = self.webdav_files.clone();
+            egui::Grid::new("webdav_icon_grid")
+                .num_columns(cols)
+                .min_col_width(cell_w)
+                .max_col_width(cell_w)
+                .spacing([8.0, 8.0])
+                .show(ui, |ui| {
+                    for (idx, entry) in entries_snap.iter().enumerate() {
+                        let (icon, icon_color) = if entry.is_dir {
+                            (egui_phosphor::regular::FOLDER, theme::WARNING)
+                        } else {
+                            webdav_file_icon(&entry.name)
+                        };
+
+                        let cell_frame = egui::Frame::new()
+                            .fill(theme::CARD)
+                            .corner_radius(egui::CornerRadius::same(6))
+                            .inner_margin(egui::Margin::same(8));
+
+                        let resp = cell_frame.show(ui, |ui| {
+                            ui.set_width(cell_w - 16.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(RichText::new(icon).size(52.0).color(icon_color));
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(&entry.name).size(11.0));
+                            });
+                        }).response.interact(egui::Sense::click());
+
+                        if resp.clicked() && entry.is_dir {
+                            let base = self.webdav_browse_path.trim_end_matches('/');
+                            navigate_to = Some(format!("{}/{}/", base, entry.name));
+                        }
+                        resp.context_menu(|ui| {
+                            if !entry.is_dir {
+                                if ui.button("Add to Queue").clicked() {
+                                    enqueue_file = Some((entry.full_path.clone(), entry.name.clone()));
+                                    ui.close_menu();
+                                }
+                            }
+                            if ui.button(RichText::new("Delete").color(theme::ERROR)).clicked() {
+                                delete_file = Some(entry.name.clone());
+                                ui.close_menu();
+                            }
+                        });
+
+                        if (idx + 1) % cols == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        } else {
+            // List view
+            for entry in &self.webdav_files {
+                let (icon, icon_color) = if entry.is_dir {
+                    (egui_phosphor::regular::FOLDER, theme::WARNING)
+                } else {
+                    webdav_file_icon(&entry.name)
+                };
+
+                theme::card_frame().show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon).size(18.0).color(icon_color));
+                        ui.add_space(2.0);
+
+                        let name_label = egui::Label::new(
+                            RichText::new(&entry.name).size(13.0)
+                        ).sense(egui::Sense::click());
+
+                        if ui.add(name_label).clicked() && entry.is_dir {
+                            let base = self.webdav_browse_path.trim_end_matches('/');
+                            navigate_to = Some(format!("{}/{}/", base, entry.name));
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new(
+                                RichText::new(egui_phosphor::regular::TRASH).color(theme::ERROR)
+                            ).small()).clicked() {
+                                delete_file = Some(entry.name.clone());
+                            }
+                            if !entry.is_dir {
+                                ui.add_space(4.0);
+                                if ui.add(egui::Button::new(
+                                    RichText::new("+ Queue").color(theme::GREEN).size(11.0)
+                                ).small()).clicked() {
+                                    enqueue_file = Some((entry.full_path.clone(), entry.name.clone()));
+                                }
+                                ui.add_space(8.0);
+                                ui.label(RichText::new(format_bytes(entry.size)).size(11.0).color(theme::MUTED));
+                            }
+                        });
+                    });
+                });
+                ui.add_space(2.0);
+            }
+        }
+
+        // Deferred actions (avoid borrow conflicts)
+        if let Some(path) = navigate_to {
+            self.webdav_browse_path = format!("/{}/", path.trim_matches('/'));
+            self.fetch_webdav_files(ctx.clone());
+        }
+        if let Some((src, name)) = enqueue_file {
+            self.enqueue_from_webdav(src, name);
+        }
+        if let Some(filename) = delete_file {
+            self.delete_webdav_file(filename, ctx.clone());
         }
     }
 
@@ -2116,13 +2642,13 @@ impl RdApp {
                             });
                     });
                 });
-                ui.add_space(4.0);
+                ui.add_space(2.0);
                 ui.label(
                     RichText::new("Configure download behavior")
-                        .size(14.0)
+                        .size(13.0)
                         .color(theme::MUTED),
                 );
-                ui.add_space(16.0);
+                ui.add_space(8.0);
 
                 let s = match self.settings_edit.as_mut() {
                     Some(s) => s,
@@ -2132,66 +2658,71 @@ impl RdApp {
                     }
                 };
 
-                // Row 1: Threads + Concurrency side-by-side
-                let threads_val = s.threads_per_download;
-                let concurrent_val = s.max_concurrent_downloads;
+                // Row 1: Threads + Concurrent + Quiet Hours + System Tray in 2 columns
+                let mut tray_changed = false;
+                let mut new_tray_enabled = s.tray_enabled;
                 ui.columns(2, |cols| {
                     theme::card_frame().show(&mut cols[0], |ui| {
-                        ui.label(
-                            RichText::new("THREADS PER DOWNLOAD")
-                                .size(11.0)
-                                .color(theme::MUTED)
-                                .strong(),
-                        );
+                        ui.set_min_width(ui.available_width());
+                        let track_w = (ui.available_width() - 52.0).max(60.0);
+                        ui.label(RichText::new("THREADS / DOWNLOAD").size(11.0).color(theme::MUTED).strong());
+                        ui.add_space(2.0);
+                        ui.spacing_mut().slider_width = track_w;
+                        ui.add(egui::Slider::new(&mut s.threads_per_download, 1..=16).clamping(egui::SliderClamping::Always));
                         ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(format!("{}", threads_val))
-                                .size(32.0)
-                                .strong()
-                                .color(theme::GREEN),
-                        );
-                        ui.add_space(4.0);
-                        ui.add(
-                            egui::Slider::new(&mut s.threads_per_download, 1..=16)
-                                .clamping(egui::SliderClamping::Always),
-                        );
+                        ui.label(RichText::new("MAX CONCURRENT").size(11.0).color(theme::MUTED).strong());
+                        ui.add_space(2.0);
+                        ui.spacing_mut().slider_width = track_w;
+                        ui.add(egui::Slider::new(&mut s.max_concurrent_downloads, 1..=10).clamping(egui::SliderClamping::Always));
                     });
                     theme::card_frame().show(&mut cols[1], |ui| {
-                        ui.label(
-                            RichText::new("MAX CONCURRENT")
-                                .size(11.0)
-                                .color(theme::MUTED)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(format!("{}", concurrent_val))
-                                .size(32.0)
-                                .strong()
-                                .color(theme::GREEN),
-                        );
+                        ui.label(RichText::new("QUIET HOURS").size(11.0).color(theme::MUTED).strong());
                         ui.add_space(4.0);
-                        ui.add(
-                            egui::Slider::new(&mut s.max_concurrent_downloads, 1..=10)
-                                .clamping(egui::SliderClamping::Always),
-                        );
+                        ui.checkbox(&mut s.quiet_hours_enabled, "Pause during quiet hours");
+                        if s.quiet_hours_enabled {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("From").color(theme::MUTED).size(12.0));
+                                let mut start = s.quiet_hours_start.clone().unwrap_or_default();
+                                if ui.add(egui::TextEdit::singleline(&mut start).desired_width(52.0).hint_text("00:00")).changed() {
+                                    s.quiet_hours_start = if start.is_empty() { None } else { Some(start) };
+                                }
+                                ui.label(RichText::new("to").color(theme::MUTED).size(12.0));
+                                let mut end = s.quiet_hours_end.clone().unwrap_or_default();
+                                if ui.add(egui::TextEdit::singleline(&mut end).desired_width(52.0).hint_text("08:00")).changed() {
+                                    s.quiet_hours_end = if end.is_empty() { None } else { Some(end) };
+                                }
+                            });
+                        }
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("SYSTEM TRAY").size(11.0).color(theme::MUTED).strong());
+                        ui.add_space(4.0);
+                        if ui.checkbox(&mut new_tray_enabled, "Enable system tray icon").changed() {
+                            s.tray_enabled = new_tray_enabled;
+                            tray_changed = true;
+                            if new_tray_enabled { self.show_tray_modal = true; }
+                        }
                     });
                 });
-                ui.add_space(12.0);
+                if tray_changed {
+                    self.tray_icon = if new_tray_enabled { build_tray() } else { None };
+                }
+                ui.add_space(8.0);
 
-                // Row 2: Download directory (full width)
+                // Row 2: Download folders (default + per-type, all in one card)
                 theme::card_frame().show(ui, |ui| {
-                    ui.label(
-                        RichText::new("DOWNLOAD DIRECTORY")
-                            .size(11.0)
-                            .color(theme::MUTED)
-                            .strong(),
-                    );
-                    ui.add_space(8.0);
+                    ui.label(RichText::new("DOWNLOAD FOLDERS").size(11.0).color(theme::MUTED).strong());
+                    ui.add_space(6.0);
+
+                    const LABEL_W: f32 = 90.0;
+                    const BTN_W: f32 = 64.0;
+
+                    // Default folder (required)
                     ui.horizontal(|ui| {
+                        ui.add_sized([LABEL_W, 20.0], egui::Label::new(RichText::new("Default").size(12.0)));
                         ui.add(
                             egui::TextEdit::singleline(&mut s.download_dir)
-                                .desired_width(ui.available_width() - 72.0)
+                                .desired_width(ui.available_width() - BTN_W - 4.0)
                                 .font(egui::TextStyle::Monospace),
                         );
                         if ui.button("Browse").clicked() {
@@ -2200,78 +2731,39 @@ impl RdApp {
                             }
                         }
                     });
-                });
-                ui.add_space(12.0);
+                    ui.add_space(4.0);
 
-                // Row 3: Quiet hours + System tray side-by-side
-                let mut tray_changed = false;
-                let mut new_tray_enabled = s.tray_enabled;
-                ui.columns(2, |cols| {
-                    theme::card_frame().show(&mut cols[0], |ui| {
-                        ui.label(
-                            RichText::new("QUIET HOURS")
-                                .size(11.0)
-                                .color(theme::MUTED)
-                                .strong(),
-                        );
-                        ui.add_space(8.0);
-                        ui.checkbox(&mut s.quiet_hours_enabled, "Pause during quiet hours");
-                        if s.quiet_hours_enabled {
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("From").color(theme::MUTED).size(12.0));
-                                let mut start = s.quiet_hours_start.clone().unwrap_or_default();
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut start)
-                                            .desired_width(60.0)
-                                            .hint_text("00:00"),
-                                    )
-                                    .changed()
-                                {
-                                    s.quiet_hours_start =
-                                        if start.is_empty() { None } else { Some(start) };
-                                }
-                                ui.label(RichText::new("to").color(theme::MUTED).size(12.0));
-                                let mut end = s.quiet_hours_end.clone().unwrap_or_default();
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut end)
-                                            .desired_width(60.0)
-                                            .hint_text("08:00"),
-                                    )
-                                    .changed()
-                                {
-                                    s.quiet_hours_end =
-                                        if end.is_empty() { None } else { Some(end) };
-                                }
-                            });
-                        }
-                    });
-                    theme::card_frame().show(&mut cols[1], |ui| {
-                        ui.label(
-                            RichText::new("SYSTEM TRAY")
-                                .size(11.0)
-                                .color(theme::MUTED)
-                                .strong(),
-                        );
-                        ui.add_space(8.0);
-                        if ui
-                            .checkbox(&mut new_tray_enabled, "Enable system tray icon")
-                            .changed()
-                        {
-                            s.tray_enabled = new_tray_enabled;
-                            tray_changed = true;
-                            if new_tray_enabled {
-                                self.show_tray_modal = true;
+                    // Type-specific folders
+                    let type_rows: &mut [(&str, &mut Option<String>)] = &mut [
+                        ("Video", &mut s.folder_rules.video),
+                        ("Audio", &mut s.folder_rules.audio),
+                        ("Archive", &mut s.folder_rules.archive),
+                        ("Programs", &mut s.folder_rules.programs),
+                    ];
+                    for (label, rule) in type_rows.iter_mut() {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([LABEL_W, 20.0], egui::Label::new(RichText::new(*label).size(12.0).color(theme::MUTED)));
+                            let mut text = rule.clone().unwrap_or_default();
+                            let changed = ui.add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(ui.available_width() - BTN_W - 4.0)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("Default"),
+                            ).changed();
+                            if changed {
+                                **rule = if text.is_empty() { None } else { Some(text) };
                             }
-                        }
-                    });
+                            if ui.button("Browse").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    **rule = Some(path.to_string_lossy().to_string());
+                                }
+                            }
+                        });
+                        ui.add_space(2.0);
+                    }
                 });
-                if tray_changed {
-                    self.tray_icon = if new_tray_enabled { build_tray() } else { None };
-                }
-                ui.add_space(16.0);
+                ui.add_space(8.0);
+
 
                 self.show_webdav_section(ui, ctx);
                 ui.add_space(8.0);
@@ -2420,7 +2912,7 @@ impl eframe::App for RdApp {
         #[cfg(target_os = "linux")]
         gtk::main_iteration_do(false);
 
-        self.poll_events();
+        self.poll_events(ctx);
 
         // Tray menu events
         while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
@@ -2449,6 +2941,18 @@ impl eframe::App for RdApp {
                 self.tray_hidden = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+        }
+
+        // Start Active items with no engine task - only runs once per QueueRefreshed event
+        if self.needs_auto_start {
+            self.needs_auto_start = false;
+            let to_start: Vec<String> = self.queue.iter()
+                .filter(|item| item.status == DownloadStatus::Active && !self.dl_in_flight.contains(&item.id))
+                .map(|item| item.id.clone())
+                .collect();
+            for id in to_start {
+                self.start_download_item(id, ctx.clone());
             }
         }
 
@@ -2991,6 +3495,95 @@ impl eframe::App for RdApp {
             }
         }
 
+        // Schedule all modal
+        if self.show_schedule_all {
+            egui::Modal::new(egui::Id::new("schedule_all_modal")).show(&ctx, |ui| {
+                ui.set_width(340.0);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Schedule All Queued Downloads").size(16.0).strong());
+                ui.add_space(8.0);
+                ui.label(RichText::new("All queued items will start at the specified time.").size(12.0).color(theme::MUTED));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Date").size(12.0).color(theme::MUTED));
+                    ui.add(egui::TextEdit::singleline(&mut self.schedule_all_date)
+                        .desired_width(95.0).hint_text("YYYY-MM-DD"));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Time").size(12.0).color(theme::MUTED));
+                    ui.add(egui::TextEdit::singleline(&mut self.schedule_all_time)
+                        .desired_width(58.0).hint_text("HH:MM"));
+                });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(
+                        RichText::new("Confirm").color(theme::GREEN)
+                    ).min_size(egui::vec2(90.0, 34.0))).clicked() {
+                        let dt_str = format!("{} {}:00", self.schedule_all_date, self.schedule_all_time);
+                        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S") {
+                            use chrono::TimeZone;
+                            if let chrono::LocalResult::Single(local_dt) = chrono::Local.from_local_datetime(&ndt) {
+                                if let Ok(conn) = self.db_conn.lock() {
+                                    let _ = queue::schedule_all_queued(&conn, &local_dt.to_rfc3339());
+                                }
+                                self.refresh_queue();
+                                self.show_schedule_all = false;
+                            }
+                        }
+                    }
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new("Cancel")
+                        .min_size(egui::vec2(70.0, 34.0))).clicked() {
+                        self.show_schedule_all = false;
+                    }
+                });
+                ui.add_space(4.0);
+            });
+        }
+
+        // Clear queue modal
+        if self.show_clear_confirm {
+            egui::Modal::new(egui::Id::new("clear_queue_confirm")).show(&ctx, |ui| {
+                ui.set_width(360.0);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Clear Download Queue").size(16.0).strong());
+                ui.add_space(8.0);
+                ui.label(RichText::new("Active downloads will not be affected.").size(12.0).color(theme::MUTED));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(
+                        RichText::new("Clear + Delete Files").color(theme::ERROR)
+                    ).min_size(egui::vec2(150.0, 34.0))).clicked() {
+                        if let Ok(conn) = self.db_conn.lock() {
+                            if let Ok(paths) = queue::clear_queue(&conn) {
+                                for p in paths {
+                                    if std::path::Path::new(&p).exists() {
+                                        let _ = std::fs::remove_file(&p);
+                                    }
+                                }
+                            }
+                        }
+                        self.refresh_queue();
+                        self.show_clear_confirm = false;
+                    }
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new("Clear Queue Only")
+                        .min_size(egui::vec2(130.0, 34.0))).clicked() {
+                        if let Ok(conn) = self.db_conn.lock() {
+                            let _ = queue::clear_queue(&conn);
+                        }
+                        self.refresh_queue();
+                        self.show_clear_confirm = false;
+                    }
+                    ui.add_space(4.0);
+                    if ui.add(egui::Button::new("Cancel")
+                        .min_size(egui::vec2(60.0, 34.0))).clicked() {
+                        self.show_clear_confirm = false;
+                    }
+                });
+                ui.add_space(4.0);
+            });
+        }
+
         // Global error popup
         if self.app_error.is_some() {
             let err_text = self.app_error.clone().unwrap_or_default();
@@ -3116,6 +3709,33 @@ fn status_dot(ui: &mut Ui, label: &str, active: bool) {
     });
 }
 
+fn webdav_file_icon(name: &str) -> (&'static str, egui::Color32) {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let icon = match ext.as_str() {
+        "mkv" | "mp4" | "avi" | "mov" | "wmv" | "webm" | "flv" | "m4v" | "ts" | "m2ts" =>
+            egui_phosphor::regular::FILM_STRIP,
+        "mp3" | "flac" | "aac" | "ogg" | "wav" | "m4a" | "opus" | "wma" =>
+            egui_phosphor::regular::MUSIC_NOTE,
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "tgz" | "iso" =>
+            egui_phosphor::regular::FILE_ARCHIVE,
+        "exe" | "msi" | "deb" | "rpm" | "appimage" | "dmg" | "flatpak" | "snap" =>
+            egui_phosphor::regular::PACKAGE,
+        "pdf" => egui_phosphor::regular::FILE_PDF,
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" =>
+            egui_phosphor::regular::IMAGE,
+        _ => egui_phosphor::regular::FILE,
+    };
+    (icon, theme::GREEN)
+}
+
+fn truncate_name(name: &str, max_chars: usize) -> String {
+    if name.chars().count() <= max_chars {
+        name.to_string()
+    } else {
+        format!("{}…", &name.chars().take(max_chars - 1).collect::<String>())
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     if bytes >= 1_073_741_824 {
         format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
@@ -3125,6 +3745,15 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.0} KB", bytes as f64 / 1024.0)
     } else {
         format!("{bytes} B")
+    }
+}
+
+fn format_speed(bytes_per_sec: u64) -> String {
+    let bits = bytes_per_sec * 8;
+    if bits >= 1_000_000 {
+        format!("{:.1} Mb/s", bits as f64 / 1_000_000.0)
+    } else {
+        format!("{} Kb/s", bits / 1_000)
     }
 }
 

@@ -174,14 +174,48 @@ pub fn remove(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn schedule_all_queued(conn: &Connection, at: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET status = 'scheduled', scheduled_at = ?1, updated_at = ?2 WHERE status = 'queued'",
+        params![at, now],
+    )?;
+    Ok(())
+}
+
+pub fn schedule(conn: &Connection, id: &str, at: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET status = 'scheduled', scheduled_at = ?1, updated_at = ?2 WHERE id = ?3",
+        params![at, now, id],
+    )?;
+    Ok(())
+}
+
+pub fn clear_queue(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT dest_path FROM downloads WHERE status NOT IN ('active')",
+    )?;
+    let paths: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    conn.execute("DELETE FROM downloads WHERE status NOT IN ('active')", [])?;
+    Ok(paths)
+}
+
+pub fn reset_active_to_queued(conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE downloads SET status = 'queued' WHERE status = 'active'", [])?;
+    Ok(())
+}
+
 pub fn get_queued_ready(conn: &Connection) -> Result<Vec<QueuedDownload>> {
     let now = Utc::now().to_rfc3339();
     let mut stmt = conn.prepare(
         "SELECT id, url, filename, dest_path, status, priority, threads, scheduled_at,
                 total_bytes, bytes_done, error_msg, created_at, updated_at
          FROM downloads
-         WHERE status = 'queued'
-            OR (status = 'scheduled' AND scheduled_at <= ?1)
+         WHERE status = 'scheduled' AND scheduled_at <= ?1
          ORDER BY priority DESC, created_at ASC",
     )?;
 

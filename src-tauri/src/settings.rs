@@ -2,6 +2,18 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct FolderRules {
+    #[serde(default)]
+    pub video: Option<String>,
+    #[serde(default)]
+    pub audio: Option<String>,
+    #[serde(default)]
+    pub archive: Option<String>,
+    #[serde(default)]
+    pub programs: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
     pub threads_per_download: u8,
@@ -12,6 +24,8 @@ pub struct AppSettings {
     pub quiet_hours_end: Option<String>,
     #[serde(default)]
     pub tray_enabled: bool,
+    #[serde(default)]
+    pub folder_rules: FolderRules,
 }
 
 impl Default for AppSettings {
@@ -28,7 +42,33 @@ impl Default for AppSettings {
             quiet_hours_start: None,
             quiet_hours_end: None,
             tray_enabled: false,
+            folder_rules: FolderRules::default(),
         }
+    }
+}
+
+pub enum FileCategory {
+    Video,
+    Audio,
+    Archive,
+    Programs,
+    Other,
+}
+
+pub fn detect_file_category(filename: &str) -> FileCategory {
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "mkv" | "mp4" | "avi" | "mov" | "wmv" | "flv" | "m2ts" | "ts" | "m4v" | "webm"
+        | "vob" | "mpg" | "mpeg" => FileCategory::Video,
+        "mp3" | "flac" | "aac" | "ogg" | "wav" | "m4a" | "opus" | "wma" | "alac" | "ape" => {
+            FileCategory::Audio
+        }
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "cbz" | "cbr" | "iso"
+        | "tgz" | "tbz2" => FileCategory::Archive,
+        "exe" | "msi" | "deb" | "rpm" | "appimage" | "pkg" | "dmg" | "flatpak" | "snap" => {
+            FileCategory::Programs
+        }
+        _ => FileCategory::Other,
     }
 }
 

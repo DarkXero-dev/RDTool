@@ -1,6 +1,100 @@
 use std::fs;
 use std::process::Command;
 
+pub const MOUNT_POINT: &str = "/mnt/RealDebrid";
+pub const WEBDAV_BASE_URL: &str = "https://dav.real-debrid.com";
+
+/// Read username + plain-text password from rclone.conf via `rclone reveal`.
+pub fn get_webdav_credentials() -> Option<(String, String)> {
+    let home = dirs::home_dir()?;
+    let conf_path = home.join(".config/rclone/rclone.conf");
+    let conf = fs::read_to_string(conf_path).ok()?;
+
+    let mut username = String::new();
+    let mut obscured_pass = String::new();
+    let mut in_section = false;
+
+    for line in conf.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[realdebrid]" {
+            in_section = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_section = false;
+        }
+        if in_section {
+            if let Some(v) = trimmed.strip_prefix("user = ") {
+                username = v.trim().to_string();
+            } else if let Some(v) = trimmed.strip_prefix("pass = ") {
+                obscured_pass = v.trim().to_string();
+            }
+        }
+    }
+
+    if username.is_empty() || obscured_pass.is_empty() {
+        return None;
+    }
+
+    // Decode rclone-obscured password
+    let out = Command::new("rclone")
+        .args(["reveal", &obscured_pass])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let password = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Some((username, password))
+}
+
+/// Convert a local mount path to its WebDAV HTTP URL.
+/// e.g. "/mnt/RealDebrid/Movies/file.mkv" -> "https://dav.real-debrid.com/Movies/file.mkv"
+pub fn mount_path_to_http_url(full_path: &str) -> String {
+    let rel = full_path
+        .strip_prefix(MOUNT_POINT)
+        .unwrap_or(full_path)
+        .trim_start_matches('/');
+    format!("{}/{}", WEBDAV_BASE_URL, rel)
+}
+
+#[derive(Debug, Clone)]
+pub struct WebDavFileEntry {
+    pub name: String,
+    pub full_path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+pub fn list_mount_dir(rel_path: &str) -> Result<Vec<WebDavFileEntry>, String> {
+    let base = std::path::Path::new(MOUNT_POINT);
+    let dir = if rel_path.is_empty() || rel_path == "/" {
+        base.to_path_buf()
+    } else {
+        base.join(rel_path.trim_start_matches('/'))
+    };
+
+    let read = fs::read_dir(&dir).map_err(|e| format!("{e}"))?;
+    let mut entries: Vec<WebDavFileEntry> = read
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            Some(WebDavFileEntry {
+                name: e.file_name().to_string_lossy().to_string(),
+                full_path: e.path().to_string_lossy().to_string(),
+                is_dir: meta.is_dir(),
+                size: if meta.is_file() { meta.len() } else { 0 },
+            })
+        })
+        .collect();
+
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct WebDavStatus {
     pub platform: String,
