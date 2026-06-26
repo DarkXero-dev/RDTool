@@ -1,8 +1,12 @@
 # RDTool
 
+<div align="center">
+
 [![Build](https://github.com/DarkXero-dev/RDTool/actions/workflows/build.yml/badge.svg)](https://github.com/DarkXero-dev/RDTool/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/DarkXero-dev/RDTool)](https://github.com/DarkXero-dev/RDTool/releases/latest)
+
+</div>
 
 A native desktop GUI client for [Real-Debrid](https://real-debrid.com). Converts restricted hosted links and magnets into fast direct downloads. Built entirely in Rust with egui - no web wrapper, no Electron.
 
@@ -37,8 +41,8 @@ Grab the latest build from the [Releases](https://github.com/DarkXero-dev/RDTool
 
 **Dependencies:**
 
-```
-sudo pacman -S rust gtk3 openssl xdotool libayatana-appindicator sqlite wayland
+```bash
+sudo pacman -S rust gtk3 openssl rclone xdotool libayatana-appindicator sqlite wayland
 ```
 
 **Build and install:**
@@ -46,8 +50,7 @@ sudo pacman -S rust gtk3 openssl xdotool libayatana-appindicator sqlite wayland
 ```bash
 git clone https://github.com/DarkXero-dev/RDTool.git
 cd RDTool
-makepkg -rsf
-sudo pacman -U rdtool-*.pkg.tar.zst
+makepkg -rsif
 ```
 
 ## Getting Your API Token
